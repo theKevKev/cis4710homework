@@ -17,15 +17,15 @@ _start:
         # Your code here!
         loop: 
                 # if null character then jump end
-                lb a1 0(a0) # a1 contains "H"
-                beqz a1 end_program 
+                lb a1, 0(a0) # a1 contains "H"
+                beqz a1, end_program 
 
-                # else switch to capitalized version
-                addi a1 a1 0x20
-                sb a1 0(a0)
+                # else switch to capitalized version TODO: check bounds also subtract 32 not add 32
+                addi a1, a1, 0x20
+                sb a1, 0(a0)
 
                 # then move pointer by one
-                addi a0 a0 0x1
+                addi a0, a0, 0x1
                 j loop
                 
 end_program:
