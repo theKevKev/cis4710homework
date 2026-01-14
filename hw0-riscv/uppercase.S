@@ -15,7 +15,19 @@ _start:
         la a0, input_string
 
         # Your code here!
-        
+        loop: 
+                # if null character then jump end
+                lb a1 0(a0) # a1 contains "H"
+                beqz a1 end_program 
+
+                # else switch to capitalized version
+                addi a1 a1 0x20
+                sb a1 0(a0)
+
+                # then move pointer by one
+                addi a0 a0 0x1
+                j loop
+                
 end_program:
         # jump here when you're done
         j end_program
