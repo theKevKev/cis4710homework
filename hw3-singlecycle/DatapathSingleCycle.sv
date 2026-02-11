@@ -262,7 +262,6 @@ module DatapathSingleCycle (
 
     case (insn_opcode)
       OpLui: begin
-        // TODO: start here by implementing lui
         we_logic = 1'b1;
         rd_data_logic[31:12] = insn_from_imem[31:12];
       end
@@ -271,7 +270,6 @@ module DatapathSingleCycle (
       // OpJalr: begin
       // end
       OpBranch: begin
-        // TODO: Gaurav (6 branch ISNS)
         if (insn_beq) begin
           if (rs1_data == rs2_data) begin
             pcNext = pcCurrent + imm_b_sext;
@@ -307,10 +305,10 @@ module DatapathSingleCycle (
       OpRegImm: begin
         // TODO: Kevin (9 Immediate ISNS)
         if (insn_addi) begin
-          we_logic = 1'b1;
           a_logic = rs1_data;
           b_logic = imm_i_sext;
 
+          we_logic = 1'b1;
           rd_data_logic = sum;
         end else begin
           illegal_insn = 1'b1;
@@ -322,7 +320,6 @@ module DatapathSingleCycle (
         illegal_insn = 1'b1;
       end
       OpEnviron: begin
-        // TODO: Gaurav (ecall only)
         halt = 1'b1;
       end
       // OpMiscMem: begin
