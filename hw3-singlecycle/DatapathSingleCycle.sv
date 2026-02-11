@@ -245,24 +245,29 @@ module DatapathSingleCycle (
         we_logic = 1'b1;
         rd_data_logic[31:12] = insn_from_imem[31:12];
       end
-      OpJal: begin
-      end
-      OpJalr: begin
-      end
+      // OpJal: begin
+      // end
+      // OpJalr: begin
+      // end
       OpBranch: begin
+          // TODO: Gaurav (6 branch ISNS)
       end
-      OpLoad: begin
-      end
-      OpStore: begin
-      end
+      // OpLoad: begin
+      // end
+      // OpStore: begin
+      // end
       OpRegImm: begin
+          // TODO: Kevin (9 Immediate ISNS)
       end
       OpRegReg: begin
+          // TODO: Kevin (10 RegReg ISNS)
+          // TODO: note that there are additional RegReg operators to implement (mul, div)
       end
       OpEnviron: begin
+          // TODO: Gaurav (ecall only)
       end
-      OpMiscMem: begin
-      end
+      // OpMiscMem: begin
+      // end
       default: begin
         illegal_insn = 1'b1;
       end
