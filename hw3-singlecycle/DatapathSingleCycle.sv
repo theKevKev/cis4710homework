@@ -28,12 +28,12 @@ module RegFile (
   localparam int NumRegs = 32;
   logic [`REG_SIZE] regs[NumRegs];
 
-  assign regs[0] = 32'd0; // x0 is always zero
-  assign rs1_data = regs[rs1]; // 1st read port
-  assign rs2_data = regs[rs2]; // 2nd read port
+  assign regs[0]  = 32'd0;  // x0 is always zero
+  assign rs1_data = regs[rs1];  // 1st read port
+  assign rs2_data = regs[rs2];  // 2nd read port
 
   genvar i;
-  for (i = 1; i < 32; i = i+1) begin
+  for (i = 1; i < 32; i = i + 1) begin
     always_ff @(posedge clk) begin
       if (rst) begin
         regs[i] <= 32'd0;
@@ -48,23 +48,23 @@ module RegFile (
 endmodule
 
 module DatapathSingleCycle (
-    input wire                clk,
-    input wire                rst,
+    input  wire               clk,
+    input  wire               rst,
     output logic              halt,
-    output logic [`REG_SIZE]  pc_to_imem,
-    input wire [`INSN_SIZE]   insn_from_imem,
+    output logic [ `REG_SIZE] pc_to_imem,
+    input  wire  [`INSN_SIZE] insn_from_imem,
     // addr_to_dmem is used for both loads and stores
-    output logic [`REG_SIZE]  addr_to_dmem,
-    input logic [`REG_SIZE]   load_data_from_dmem,
-    output logic [`REG_SIZE]  store_data_to_dmem,
-    output logic [3:0]        store_we_to_dmem,
+    output logic [ `REG_SIZE] addr_to_dmem,
+    input  logic [ `REG_SIZE] load_data_from_dmem,
+    output logic [ `REG_SIZE] store_data_to_dmem,
+    output logic [       3:0] store_we_to_dmem,
 
     // the PC of the insn executing in the current cycle
-    output logic [`REG_SIZE]  trace_completed_pc,
+    output logic          [ `REG_SIZE] trace_completed_pc,
     // the machine code of the insn executing in the current cycle
-    output logic [`INSN_SIZE] trace_completed_insn,
+    output logic          [`INSN_SIZE] trace_completed_insn,
     // the cycle status of the current cycle: should always be CYCLE_NO_STALL
-    output cycle_status_e     trace_completed_cycle_status
+    output cycle_status_e              trace_completed_cycle_status
 );
 
   // components of the instruction
@@ -94,7 +94,9 @@ module DatapathSingleCycle (
 
   // J - unconditional jumps
   wire [20:0] imm_j;
-  assign {imm_j[20], imm_j[10:1], imm_j[11], imm_j[19:12], imm_j[0]} = {insn_from_imem[31:12], 1'b0};
+  assign {imm_j[20], imm_j[10:1], imm_j[11], imm_j[19:12], imm_j[0]} = {
+    insn_from_imem[31:12], 1'b0
+  };
 
   wire [`REG_SIZE] imm_i_sext = {{20{imm_i[11]}}, imm_i[11:0]};
   wire [`REG_SIZE] imm_s_sext = {{20{imm_s[11]}}, imm_s[11:0]};
@@ -116,21 +118,21 @@ module DatapathSingleCycle (
   localparam bit [`OPCODE_SIZE] OpAuipc = 7'b00_101_11;
   localparam bit [`OPCODE_SIZE] OpLui = 7'b01_101_11;
 
-  wire insn_lui   = insn_opcode == OpLui;
+  wire insn_lui = insn_opcode == OpLui;
   wire insn_auipc = insn_opcode == OpAuipc;
-  wire insn_jal   = insn_opcode == OpJal;
-  wire insn_jalr  = insn_opcode == OpJalr;
+  wire insn_jal = insn_opcode == OpJal;
+  wire insn_jalr = insn_opcode == OpJalr;
 
-  wire insn_beq  = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b000;
-  wire insn_bne  = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b001;
-  wire insn_blt  = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b100;
-  wire insn_bge  = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b101;
+  wire insn_beq = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b000;
+  wire insn_bne = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b001;
+  wire insn_blt = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b100;
+  wire insn_bge = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b101;
   wire insn_bltu = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b110;
   wire insn_bgeu = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b111;
 
-  wire insn_lb  = insn_opcode == OpLoad && insn_from_imem[14:12] == 3'b000;
-  wire insn_lh  = insn_opcode == OpLoad && insn_from_imem[14:12] == 3'b001;
-  wire insn_lw  = insn_opcode == OpLoad && insn_from_imem[14:12] == 3'b010;
+  wire insn_lb = insn_opcode == OpLoad && insn_from_imem[14:12] == 3'b000;
+  wire insn_lh = insn_opcode == OpLoad && insn_from_imem[14:12] == 3'b001;
+  wire insn_lw = insn_opcode == OpLoad && insn_from_imem[14:12] == 3'b010;
   wire insn_lbu = insn_opcode == OpLoad && insn_from_imem[14:12] == 3'b100;
   wire insn_lhu = insn_opcode == OpLoad && insn_from_imem[14:12] == 3'b101;
 
@@ -138,12 +140,12 @@ module DatapathSingleCycle (
   wire insn_sh = insn_opcode == OpStore && insn_from_imem[14:12] == 3'b001;
   wire insn_sw = insn_opcode == OpStore && insn_from_imem[14:12] == 3'b010;
 
-  wire insn_addi  = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b000;
-  wire insn_slti  = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b010;
+  wire insn_addi = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b000;
+  wire insn_slti = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b010;
   wire insn_sltiu = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b011;
-  wire insn_xori  = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b100;
-  wire insn_ori   = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b110;
-  wire insn_andi  = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b111;
+  wire insn_xori = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b100;
+  wire insn_ori = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b110;
+  wire insn_andi = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b111;
 
   wire insn_slli = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b001 && insn_from_imem[31:25] == 7'd0;
   wire insn_srli = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b101 && insn_from_imem[31:25] == 7'd0;
@@ -173,7 +175,7 @@ module DatapathSingleCycle (
   wire insn_fence = insn_opcode == OpMiscMem;
 
   // this code is only for simulation, not synthesis
-  `ifndef SYNTHESIS
+`ifndef SYNTHESIS
   `include "RvDisassembler.sv"
   string disasm_string;
   always_comb begin
@@ -185,7 +187,7 @@ module DatapathSingleCycle (
   for (i = 0; i < 32; i = i + 1) begin : gen_disasm
     assign disasm_wire[(((i+1))*8)-1:((i)*8)] = disasm_string[31-i];
   end
-  `endif
+`endif
 
   // program counter
   logic [`REG_SIZE] pcNext, pcCurrent;
@@ -219,25 +221,26 @@ module DatapathSingleCycle (
   wire [`REG_SIZE] rs1_data;
   wire [`REG_SIZE] rs2_data;
   RegFile rf (
-    .clk(clk),
-    .rst(rst),
-    .we(we),
-    .rd(insn_rd),
-    .rd_data(rd_data),
-    .rs1(insn_rs1),
-    .rs2(insn_rs2),
-    .rs1_data(rs1_data),
-    .rs2_data(rs2_data)
+      .clk(clk),
+      .rst(rst),
+      .we(we),
+      .rd(insn_rd),
+      .rd_data(rd_data),
+      .rs1(insn_rs1),
+      .rs2(insn_rs2),
+      .rs1_data(rs1_data),
+      .rs2_data(rs2_data)
   );
 
   wire [`REG_SIZE] a;
   wire [`REG_SIZE] b;
+  wire carry_in;
   wire [`REG_SIZE] sum;
   CarryLookaheadAdder cla (
-    .a(a),
-    .b(b),
-    .cin(1'b0),
-    .sum(sum)
+      .a  (a),
+      .b  (b),
+      .cin(carry_in),
+      .sum(sum)
   );
 
   logic illegal_insn;
@@ -245,11 +248,13 @@ module DatapathSingleCycle (
   logic [`REG_SIZE] rd_data_logic;
   logic [`REG_SIZE] a_logic;
   logic [`REG_SIZE] b_logic;
+  logic carry_in_logic;
 
   assign we = we_logic;
   assign rd_data = rd_data_logic;
   assign a = a_logic;
   assign b = b_logic;
+  assign carry_in = carry_in_logic;
 
   always_comb begin
     illegal_insn = 1'b0;
@@ -258,6 +263,7 @@ module DatapathSingleCycle (
     rd_data_logic = 32'b0;
     a_logic = 32'b0;
     b_logic = 32'b0;
+    carry_in_logic = 1'b0;
     pcNext = pcCurrent + 4;
 
     case (insn_opcode)
@@ -303,21 +309,66 @@ module DatapathSingleCycle (
       // OpStore: begin
       // end
       OpRegImm: begin
-        // TODO: Kevin (9 Immediate ISNS)
+        we_logic = 1'b1;
         if (insn_addi) begin
           a_logic = rs1_data;
           b_logic = imm_i_sext;
 
-          we_logic = 1'b1;
           rd_data_logic = sum;
+        end else if (insn_slti) begin
+          rd_data_logic = rs1_data < $signed(imm_i_sext) ? 1 : 0;
+        end else if (insn_sltiu) begin
+          rd_data_logic = rs1_data < imm_i_sext ? 1 : 0;
+        end else if (insn_xori) begin
+          rd_data_logic = rs1_data ^ imm_i_sext;
+        end else if (insn_ori) begin
+          rd_data_logic = rs1_data | imm_i_sext;
+        end else if (insn_andi) begin
+          rd_data_logic = rs1_data & imm_i_sext;
+        end else if (insn_slli) begin
+          rd_data_logic = rs1_data << imm_i_sext[4:0];
+        end else if (insn_srli) begin
+          rd_data_logic = rs1_data >> imm_i_sext[4:0];
+        end else if (insn_srai) begin
+          rd_data_logic = rs1_data >>> imm_i_sext[4:0];
         end else begin
           illegal_insn = 1'b1;
         end
       end
       OpRegReg: begin
-        // TODO: Kevin (10 RegReg ISNS)
+        we_logic = 1'b1;
+
+        if (insn_add) begin
+          a_logic = rs1_data;
+          b_logic = rs2_data;
+
+          rd_data_logic = sum;
+        end else if (insn_sub) begin
+          a_logic = rs1_data;
+          b_logic = ~rs2_data;
+          carry_in_logic = 1'b1;
+
+          rd_data_logic = sum;
+        end else if (insn_sll) begin
+          rd_data_logic = rs1_data << rs2_data[4:0];
+        end else if (insn_slt) begin
+          rd_data_logic = rs1_data < $signed(rs2_data) ? 1 : 0;
+        end else if (insn_sltu) begin
+          rd_data_logic = rs1_data < rs2_data ? 1 : 0;
+        end else if (insn_xor) begin
+          rd_data_logic = rs1_data ^ rs2_data;
+        end else if (insn_srl) begin
+          rd_data_logic = rs1_data >> rs2_data[4:0];
+        end else if (insn_sra) begin
+          rd_data_logic = rs1_data >>> rs2_data[4:0];
+        end else if (insn_or) begin
+          rd_data_logic = rs1_data | rs2_data;
+        end else if (insn_and) begin
+          rd_data_logic = rs1_data & rs2_data;
+        end else begin
+          illegal_insn = 1'b1;
+        end
         // TODO: note that there are additional RegReg operators to implement (mul, div)
-        illegal_insn = 1'b1;
       end
       OpEnviron: begin
         halt = 1'b1;
@@ -424,13 +475,13 @@ prepare register/PC updates, which occur at @posedge clock_proc.
  mem:  ___|    |___
 */
 module Processor (
-    input wire               clock_proc,
-    input wire               clock_mem,
-    input wire               rst,
-    output wire [`REG_SIZE]  trace_completed_pc,
-    output wire [`INSN_SIZE] trace_completed_insn,
-    output cycle_status_e    trace_completed_cycle_status, 
-    output logic             halt
+    input  wire                        clock_proc,
+    input  wire                        clock_mem,
+    input  wire                        rst,
+    output wire           [ `REG_SIZE] trace_completed_pc,
+    output wire           [`INSN_SIZE] trace_completed_insn,
+    output cycle_status_e              trace_completed_cycle_status,
+    output logic                       halt
 );
 
   wire [`REG_SIZE] pc_to_imem, mem_data_addr, mem_data_loaded_value, mem_data_to_write;
@@ -444,16 +495,16 @@ module Processor (
   MemorySingleCycle #(
       .NUM_WORDS(8192)
   ) memory (
-      .rst      (rst),
-      .clock_mem (clock_mem),
+      .rst                (rst),
+      .clock_mem          (clock_mem),
       // imem is read-only
-      .pc_to_imem(pc_to_imem),
-      .insn_from_imem(insn_from_imem),
+      .pc_to_imem         (pc_to_imem),
+      .insn_from_imem     (insn_from_imem),
       // dmem is read-write
-      .addr_to_dmem(mem_data_addr),
+      .addr_to_dmem       (mem_data_addr),
       .load_data_from_dmem(mem_data_loaded_value),
       .store_data_to_dmem (mem_data_to_write),
-      .store_we_to_dmem  (mem_data_we)
+      .store_we_to_dmem   (mem_data_we)
   );
 
   DatapathSingleCycle datapath (
