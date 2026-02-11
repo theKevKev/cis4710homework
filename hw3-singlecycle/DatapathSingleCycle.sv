@@ -235,7 +235,7 @@ module DatapathSingleCycle (
   wire [`REG_SIZE] sum;
   CarryLookaheadAdder cla (
     .a(a),
-    .b(a),
+    .b(b),
     .cin(1'b0),
     .sum(sum)
   );
@@ -245,6 +245,11 @@ module DatapathSingleCycle (
   logic [`REG_SIZE] rd_data_logic;
   logic [`REG_SIZE] a_logic;
   logic [`REG_SIZE] b_logic;
+
+  assign we = we_logic;
+  assign rd_data = rd_data_logic;
+  assign a = a_logic;
+  assign b = b_logic;
 
   always_comb begin
     illegal_insn = 1'b0;
@@ -301,11 +306,11 @@ module DatapathSingleCycle (
       // end
       OpRegImm: begin
         // TODO: Kevin (9 Immediate ISNS)
-        if (insn_addi == 1) begin
+        if (insn_addi) begin
+          we_logic = 1'b1;
           a_logic = rs1_data;
           b_logic = imm_i_sext;
 
-          we_logic = 1'b1;
           rd_data_logic = sum;
         end else begin
           illegal_insn = 1'b1;
@@ -327,11 +332,6 @@ module DatapathSingleCycle (
       end
     endcase
   end
-
-  assign we = we_logic;
-  assign rd_data = rd_data_logic;
-  assign a = a_logic;
-  assign b = b_logic;
 
 endmodule
 
