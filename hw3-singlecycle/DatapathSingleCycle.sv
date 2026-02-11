@@ -316,7 +316,7 @@ module DatapathSingleCycle (
 
           rd_data_logic = sum;
         end else if (insn_slti) begin
-          rd_data_logic = rs1_data < $signed(imm_i_sext) ? 1 : 0;
+          rd_data_logic = $signed(rs1_data) < $signed(imm_i_sext) ? 1 : 0;
         end else if (insn_sltiu) begin
           rd_data_logic = rs1_data < imm_i_sext ? 1 : 0;
         end else if (insn_xori) begin
@@ -330,7 +330,7 @@ module DatapathSingleCycle (
         end else if (insn_srli) begin
           rd_data_logic = rs1_data >> imm_i_sext[4:0];
         end else if (insn_srai) begin
-          rd_data_logic = rs1_data >>> imm_i_sext[4:0];
+          rd_data_logic = $signed(rs1_data) >>> imm_i_sext[4:0];
         end else begin
           illegal_insn = 1'b1;
         end
@@ -352,7 +352,7 @@ module DatapathSingleCycle (
         end else if (insn_sll) begin
           rd_data_logic = rs1_data << rs2_data[4:0];
         end else if (insn_slt) begin
-          rd_data_logic = rs1_data < $signed(rs2_data) ? 1 : 0;
+          rd_data_logic = $signed(rs1_data) < $signed(rs2_data) ? 1 : 0;
         end else if (insn_sltu) begin
           rd_data_logic = rs1_data < rs2_data ? 1 : 0;
         end else if (insn_xor) begin
@@ -360,7 +360,7 @@ module DatapathSingleCycle (
         end else if (insn_srl) begin
           rd_data_logic = rs1_data >> rs2_data[4:0];
         end else if (insn_sra) begin
-          rd_data_logic = rs1_data >>> rs2_data[4:0];
+          rd_data_logic = $signed(rs1_data) >>> rs2_data[4:0];
         end else if (insn_or) begin
           rd_data_logic = rs1_data | rs2_data;
         end else if (insn_and) begin
@@ -380,6 +380,11 @@ module DatapathSingleCycle (
       end
     endcase
   end
+
+  // no clue what this does lol
+  assign trace_completed_pc = pcCurrent;
+  assign trace_completed_insn = insn_from_imem;
+  assign trace_completed_cycle_status = CYCLE_NO_STALL;
 
 endmodule
 
