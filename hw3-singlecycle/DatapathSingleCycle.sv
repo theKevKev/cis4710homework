@@ -214,33 +214,63 @@ module DatapathSingleCycle (
 
   // NOTE: don't rename your RegFile instance as the tests expect it to be `rf`
   // TODO: you will need to edit the port connections, however.
+  wire we;
+  wire [`REG_SIZE] rd_data;
+
   wire [`REG_SIZE] rs1_data;
   wire [`REG_SIZE] rs2_data;
   RegFile rf (
     .clk(clk),
     .rst(rst),
-    .we(1'b0),
-    .rd(0),
-    .rd_data(0),
-    .rs1(0),
-    .rs2(0),
+    .we(we),
+    .rd(insn_rd),
+    .rd_data(rd_data),
+    .rs1(insn_rs1),
+    .rs2(insn_rs2),
     .rs1_data(rs1_data),
     .rs2_data(rs2_data));
 
   logic illegal_insn;
+  logic we_logic;
+  logic [`REG_SIZE] rd_data_logic;
 
   always_comb begin
     illegal_insn = 1'b0;
+    we_logic = 1'b0;
+    rd_data_logic = 32'b0;
 
     case (insn_opcode)
       OpLui: begin
         // TODO: start here by implementing lui
+        we_logic = 1'b1;
+        rd_data_logic[31:12] = insn_from_imem[31:12];
+      end
+      OpJal: begin
+      end
+      OpJalr: begin
+      end
+      OpBranch: begin
+      end
+      OpLoad: begin
+      end
+      OpStore: begin
+      end
+      OpRegImm: begin
+      end
+      OpRegReg: begin
+      end
+      OpEnviron: begin
+      end
+      OpMiscMem: begin
       end
       default: begin
         illegal_insn = 1'b1;
       end
     endcase
   end
+
+  assign we = we_logic;
+  assign rd_data = rd_data_logic;
 
 endmodule
 
