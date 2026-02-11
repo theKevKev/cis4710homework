@@ -252,6 +252,7 @@ module DatapathSingleCycle (
     rd_data_logic = 32'b0;
     a_logic = 32'b0;
     b_logic = 32'b0;
+    pcNext = pcCurrent + 4;
 
     case (insn_opcode)
       OpLui: begin
@@ -265,7 +266,33 @@ module DatapathSingleCycle (
       // end
       OpBranch: begin
         // TODO: Gaurav (6 branch ISNS)
-        illegal_insn = 1'b1;
+        if (insn_beq == 1) begin
+          if (rs1_data == rs2_data) begin
+            pcNext = pcCurrent + imm_b_sext;
+          end
+        end else if (insn_bne == 1) begin
+          if (rs1_data != rs2_data) begin
+            pcNext = pcCurrent + imm_b_sext;
+          end
+        end else if (insn_blt == 1) begin
+          if ($signed(rs1_data) < $signed(rs2_data)) begin
+            pcNext = pcCurrent + imm_b_sext;
+          end
+        end else if (insn_bge == 1) begin
+          if ($signed(rs1_data) >= $signed(rs2_data)) begin
+            pcNext = pcCurrent + imm_b_sext;
+          end
+        end else if (insn_bltu == 1) begin
+          if (rs1_data < rs2_data) begin
+            pcNext = pcCurrent + imm_b_sext;
+          end
+        end else if (insn_bgeu == 1) begin
+          if (rs1_data >= rs2_data) begin
+            pcNext = pcCurrent + imm_b_sext;
+          end
+        end else begin
+          illegal_insn = 1'b1;
+        end
       end
       // OpLoad: begin
       // end
@@ -298,8 +325,6 @@ module DatapathSingleCycle (
         illegal_insn = 1'b1;
       end
     endcase
-
-    pcNext = pcCurrent + 4;
   end
 
   assign we = we_logic;
