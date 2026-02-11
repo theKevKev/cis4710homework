@@ -248,6 +248,7 @@ module DatapathSingleCycle (
 
   always_comb begin
     illegal_insn = 1'b0;
+    halt = 1'b0;
     we_logic = 1'b0;
     rd_data_logic = 32'b0;
     a_logic = 32'b0;
@@ -266,27 +267,27 @@ module DatapathSingleCycle (
       // end
       OpBranch: begin
         // TODO: Gaurav (6 branch ISNS)
-        if (insn_beq == 1) begin
+        if (insn_beq) begin
           if (rs1_data == rs2_data) begin
             pcNext = pcCurrent + imm_b_sext;
           end
-        end else if (insn_bne == 1) begin
+        end else if (insn_bne) begin
           if (rs1_data != rs2_data) begin
             pcNext = pcCurrent + imm_b_sext;
           end
-        end else if (insn_blt == 1) begin
+        end else if (insn_blt) begin
           if ($signed(rs1_data) < $signed(rs2_data)) begin
             pcNext = pcCurrent + imm_b_sext;
           end
-        end else if (insn_bge == 1) begin
+        end else if (insn_bge) begin
           if ($signed(rs1_data) >= $signed(rs2_data)) begin
             pcNext = pcCurrent + imm_b_sext;
           end
-        end else if (insn_bltu == 1) begin
+        end else if (insn_bltu) begin
           if (rs1_data < rs2_data) begin
             pcNext = pcCurrent + imm_b_sext;
           end
-        end else if (insn_bgeu == 1) begin
+        end else if (insn_bgeu) begin
           if (rs1_data >= rs2_data) begin
             pcNext = pcCurrent + imm_b_sext;
           end
@@ -317,7 +318,7 @@ module DatapathSingleCycle (
       end
       OpEnviron: begin
         // TODO: Gaurav (ecall only)
-        illegal_insn = 1'b1;
+        halt = 1'b1;
       end
       // OpMiscMem: begin
       // end
