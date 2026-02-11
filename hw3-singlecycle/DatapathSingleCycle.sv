@@ -216,7 +216,6 @@ module DatapathSingleCycle (
   // TODO: you will need to edit the port connections, however.
   wire we;
   wire [`REG_SIZE] rd_data;
-
   wire [`REG_SIZE] rs1_data;
   wire [`REG_SIZE] rs2_data;
   RegFile rf (
@@ -228,16 +227,31 @@ module DatapathSingleCycle (
     .rs1(insn_rs1),
     .rs2(insn_rs2),
     .rs1_data(rs1_data),
-    .rs2_data(rs2_data));
+    .rs2_data(rs2_data)
+  );
+
+  wire [`REG_SIZE] a;
+  wire [`REG_SIZE] b;
+  wire [`REG_SIZE] sum;
+  CarryLookaheadAdder cla (
+    .a(a),
+    .b(a),
+    .cin(1'b0),
+    .sum(sum)
+  );
 
   logic illegal_insn;
   logic we_logic;
   logic [`REG_SIZE] rd_data_logic;
+  logic [`REG_SIZE] a_logic;
+  logic [`REG_SIZE] b_logic;
 
   always_comb begin
     illegal_insn = 1'b0;
     we_logic = 1'b0;
     rd_data_logic = 32'b0;
+    a_logic = 32'b0;
+    b_logic = 32'b0;
 
     case (insn_opcode)
       OpLui: begin
@@ -250,21 +264,33 @@ module DatapathSingleCycle (
       // OpJalr: begin
       // end
       OpBranch: begin
-          // TODO: Gaurav (6 branch ISNS)
+        // TODO: Gaurav (6 branch ISNS)
+        illegal_insn = 1'b1;
       end
       // OpLoad: begin
       // end
       // OpStore: begin
       // end
       OpRegImm: begin
-          // TODO: Kevin (9 Immediate ISNS)
+        // TODO: Kevin (9 Immediate ISNS)
+        if (insn_addi == 1) begin
+          a_logic = rs1_data;
+          b_logic = imm_i_sext;
+
+          we_logic = 1'b1;
+          rd_data_logic = sum;
+        end else begin
+          illegal_insn = 1'b1;
+        end
       end
       OpRegReg: begin
-          // TODO: Kevin (10 RegReg ISNS)
-          // TODO: note that there are additional RegReg operators to implement (mul, div)
+        // TODO: Kevin (10 RegReg ISNS)
+        // TODO: note that there are additional RegReg operators to implement (mul, div)
+        illegal_insn = 1'b1;
       end
       OpEnviron: begin
-          // TODO: Gaurav (ecall only)
+        // TODO: Gaurav (ecall only)
+        illegal_insn = 1'b1;
       end
       // OpMiscMem: begin
       // end
@@ -272,10 +298,14 @@ module DatapathSingleCycle (
         illegal_insn = 1'b1;
       end
     endcase
+
+    pcNext = pcCurrent + 4;
   end
 
   assign we = we_logic;
   assign rd_data = rd_data_logic;
+  assign a = a_logic;
+  assign b = b_logic;
 
 endmodule
 
