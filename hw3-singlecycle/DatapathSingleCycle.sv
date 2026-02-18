@@ -243,6 +243,38 @@ module DatapathSingleCycle (
       .sum(sum)
   );
 
+  wire [`REG_SIZE] rs1_negated;
+  CarryLookaheadAdder negator_rs1 (
+      .a  (~rs1_data),   // Invert bits
+      .b  (32'b0),       // Add 0
+      .cin(1'b1),        // Add 1 (via carry-in)
+      .sum(rs1_negated)  // Result is -rs1
+  );
+
+  wire [`REG_SIZE] rs2_negated;
+  CarryLookaheadAdder negator_rs2 (
+      .a  (~rs2_data),   // Invert bits
+      .b  (32'b0),       // Add 0
+      .cin(1'b1),        // Add 1 (via carry-in)
+      .sum(rs2_negated)  // Result is -rs1
+  );
+
+  wire [`REG_SIZE] quotient_negated;
+  CarryLookaheadAdder negator_quotient (
+      .a  (~o_quotient),      // Invert bits
+      .b  (32'b0),            // Add 0
+      .cin(1'b1),             // Add 1 (via carry-in)
+      .sum(quotient_negated)  // Result is -rs1
+  );
+
+  wire [`REG_SIZE] remainder_negated;
+  CarryLookaheadAdder negator_remainder (
+      .a  (~o_remainder),      // Invert bits
+      .b  (32'b0),             // Add 0
+      .cin(1'b1),              // Add 1 (via carry-in)
+      .sum(remainder_negated)  // Result is -rs1
+  );
+
   wire [31:0] i_dividend;
   wire [31:0] i_divisor;
   wire [31:0] o_remainder;
@@ -299,7 +331,7 @@ module DatapathSingleCycle (
       OpJalr: begin
         we_logic = 1'b1;
         rd_data_logic = pcCurrent + 4;
-        pcNext = (rs1_data + imm_b_sext) & ~32'b1;
+        pcNext = (rs1_data + imm_i_sext) & ~32'b1;
       end
       OpBranch: begin
         if (insn_beq) begin
@@ -332,7 +364,7 @@ module DatapathSingleCycle (
       end
       OpLoad: begin
         if (insn_lb) begin
-          addr_to_dmem = rs1_data + imm_i_sext;
+          addr_to_dmem  = rs1_data + imm_i_sext;
           rd_data_logic = {{24{load_data_from_dmem[7]}}, load_data_from_dmem[7:0]};
         end else begin
           illegal_insn = 1'b1;
@@ -404,26 +436,26 @@ module DatapathSingleCycle (
           multiplication_result = $signed(rs1_data) * $signed(rs2_data);
           rd_data_logic = multiplication_result[63:32];
         end else if (insn_mulhsu) begin
-          multiplication_result = $signed(rs1_data) * rs2_data;
+          multiplication_result = $signed(rs1_data) * $signed({1'b0, rs2_data});
           rd_data_logic = multiplication_result[63:32];
         end else if (insn_mulhu) begin
           multiplication_result = rs1_data * rs2_data;
           rd_data_logic = multiplication_result[63:32];
-        end else if (insn_div) begin  // and i'd guess this doesn't work either
-          i_dividend_logic = $signed(rs1_data);
-          i_divisor_logic = $signed(rs2_data);
+        end else if (insn_div) begin
+          i_dividend_logic = rs1_data[31] ? rs1_negated : rs1_data;
+          i_divisor_logic = rs2_data[31] ? rs2_negated : rs2_data;
 
-          rd_data_logic = o_quotient;
+          rd_data_logic = (rs1_data[31] ^ rs2_data[31]) ? quotient_negated : o_quotient;
         end else if (insn_divu) begin
           i_dividend_logic = rs1_data;
           i_divisor_logic = rs2_data;
 
           rd_data_logic = o_quotient;
-        end else if (insn_rem) begin  // surely this doesn't work
-          i_dividend_logic = $signed(rs1_data);
-          i_divisor_logic = $signed(rs2_data);
+        end else if (insn_rem) begin
+          i_dividend_logic = rs1_data[31] ? rs1_negated : rs1_data;
+          i_divisor_logic = rs2_data[31] ? rs2_negated : rs2_data;
 
-          rd_data_logic = o_remainder;
+          rd_data_logic = rs1_data[31] ? remainder_negated : o_remainder;
         end else if (insn_remu) begin
           i_dividend_logic = rs1_data;
           i_divisor_logic = rs2_data;
@@ -437,6 +469,7 @@ module DatapathSingleCycle (
         halt = 1'b1;
       end
       // OpMiscMem: begin
+
       // end
       default: begin
         illegal_insn = 1'b1;
