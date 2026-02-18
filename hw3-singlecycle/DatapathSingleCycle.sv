@@ -271,10 +271,16 @@ module DatapathSingleCycle (
         we_logic = 1'b1;
         rd_data_logic[31:12] = insn_from_imem[31:12];
       end
-      // OpJal: begin
-      // end
-      // OpJalr: begin
-      // end
+      OpJal: begin
+        we_logic = 1'b1;
+        rd_data_logic = pcCurrent + 4;
+        pcNext = pcCurrent + imm_j_sext;
+      end
+      OpJalr: begin
+        we_logic = 1'b1;
+        rd_data_logic = pcCurrent + 4;
+        pcNext = (rs1_data + imm_b_sext) & ~32'b1;
+      end
       OpBranch: begin
         if (insn_beq) begin
           if (rs1_data == rs2_data) begin
@@ -365,10 +371,25 @@ module DatapathSingleCycle (
           rd_data_logic = rs1_data | rs2_data;
         end else if (insn_and) begin
           rd_data_logic = rs1_data & rs2_data;
+          // end else if (insn_mul) begin 
+          //   rd_data_logic = (rs1_data * rs2_data)[31:0];
+          // end else if (insn_mulh) begin 
+          //   rd_data_logic = ($signed(rs1_data) * $signed(rs2_data))[63:32];
+          // end else if (insn_mulhsu) begin 
+          //   rd_data_logic = ($signed(rs1_data) * rs2_data)[63:32];
+          // end else if (insn_mulhu) begin 
+          //   rd_data_logic = (rs1_data * rs2_data)[63:32];
+          // end else if (insn_div) begin // todo
+          //   rd_data_logic = rs1_data * rs2_data;
+          // end else if (insn_divu) begin // todo
+          //   rd_data_logic = rs1_data * rs2_data;
+          // end else if (insn_rem) begin // todo
+          //   rd_data_logic = rs1_data * rs2_data;
+          // end else if (insn_remu) begin // todo
+          //   rd_data_logic = rs1_data * rs2_data;
         end else begin
           illegal_insn = 1'b1;
         end
-        // TODO: note that there are additional RegReg operators to implement (mul, div)
       end
       OpEnviron: begin
         halt = 1'b1;
