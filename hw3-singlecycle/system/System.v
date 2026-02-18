@@ -47,6 +47,91 @@ module MyClockGen (
 		.LOCK(locked)
 	);
 endmodule
+module DividerUnsigned (
+	i_dividend,
+	i_divisor,
+	o_remainder,
+	o_quotient
+);
+	input wire [31:0] i_dividend;
+	input wire [31:0] i_divisor;
+	output wire [31:0] o_remainder;
+	output wire [31:0] o_quotient;
+	wire [31:0] dividend [0:31];
+	wire [31:0] remainder [0:30];
+	wire [31:0] quotient [0:30];
+	DividerOneIter first_divide_iter(
+		.i_dividend(i_dividend),
+		.i_divisor(i_divisor),
+		.i_remainder(32'b00000000000000000000000000000000),
+		.i_quotient(32'b00000000000000000000000000000000),
+		.o_dividend(dividend[0]),
+		.o_remainder(remainder[0]),
+		.o_quotient(quotient[0])
+	);
+	genvar _gv_i_1;
+	generate
+		for (_gv_i_1 = 1; _gv_i_1 < 31; _gv_i_1 = _gv_i_1 + 1) begin : genblk1
+			localparam i = _gv_i_1;
+			DividerOneIter intermediate_divide_iters(
+				.i_dividend(dividend[i - 1]),
+				.i_divisor(i_divisor),
+				.i_remainder(remainder[i - 1]),
+				.i_quotient(quotient[i - 1]),
+				.o_dividend(dividend[i]),
+				.o_remainder(remainder[i]),
+				.o_quotient(quotient[i])
+			);
+		end
+	endgenerate
+	DividerOneIter final_divide_iter(
+		.i_dividend(dividend[30]),
+		.i_divisor(i_divisor),
+		.i_remainder(remainder[30]),
+		.i_quotient(quotient[30]),
+		.o_dividend(dividend[31]),
+		.o_remainder(o_remainder),
+		.o_quotient(o_quotient)
+	);
+endmodule
+module DividerOneIter (
+	i_dividend,
+	i_divisor,
+	i_remainder,
+	i_quotient,
+	o_dividend,
+	o_remainder,
+	o_quotient
+);
+	reg _sv2v_0;
+	input wire [31:0] i_dividend;
+	input wire [31:0] i_divisor;
+	input wire [31:0] i_remainder;
+	input wire [31:0] i_quotient;
+	output wire [31:0] o_dividend;
+	output wire [31:0] o_remainder;
+	output wire [31:0] o_quotient;
+	assign o_dividend = i_dividend << 1;
+	wire [31:0] remainder_int;
+	reg [31:0] o_quotient_logic;
+	reg [31:0] o_remainder_logic;
+	assign remainder_int = ((i_dividend >> 31) & 32'b00000000000000000000000000000001) | (i_remainder << 1);
+	always @(*) begin
+		if (_sv2v_0)
+			;
+		if (remainder_int < i_divisor) begin
+			o_quotient_logic = i_quotient << 1;
+			o_remainder_logic = remainder_int;
+		end
+		else begin
+			o_quotient_logic = (i_quotient << 1) | 32'b00000000000000000000000000000001;
+			o_remainder_logic = remainder_int - i_divisor;
+		end
+	end
+	assign o_quotient = o_quotient_logic;
+	assign o_remainder = o_remainder_logic;
+	initial _sv2v_0 = 0;
+endmodule
 module gp1 (
 	a,
 	b,
@@ -230,10 +315,10 @@ module DatapathSingleCycle (
 	output reg halt;
 	output wire [31:0] pc_to_imem;
 	input wire [31:0] insn_from_imem;
-	output wire [31:0] addr_to_dmem;
+	output reg [31:0] addr_to_dmem;
 	input wire [31:0] load_data_from_dmem;
-	output wire [31:0] store_data_to_dmem;
-	output wire [3:0] store_we_to_dmem;
+	output reg [31:0] store_data_to_dmem;
+	output reg [3:0] store_we_to_dmem;
 	output wire [31:0] trace_completed_pc;
 	output wire [31:0] trace_completed_insn;
 	output wire [31:0] trace_completed_cycle_status;
@@ -363,32 +448,97 @@ module DatapathSingleCycle (
 		.cin(carry_in),
 		.sum(sum)
 	);
+	wire [31:0] rs1_negated;
+	CarryLookaheadAdder negator_rs1(
+		.a(~rs1_data),
+		.b(32'b00000000000000000000000000000000),
+		.cin(1'b1),
+		.sum(rs1_negated)
+	);
+	wire [31:0] rs2_negated;
+	CarryLookaheadAdder negator_rs2(
+		.a(~rs2_data),
+		.b(32'b00000000000000000000000000000000),
+		.cin(1'b1),
+		.sum(rs2_negated)
+	);
+	wire [31:0] quotient_negated;
+	wire [31:0] o_quotient;
+	CarryLookaheadAdder negator_quotient(
+		.a(~o_quotient),
+		.b(32'b00000000000000000000000000000000),
+		.cin(1'b1),
+		.sum(quotient_negated)
+	);
+	wire [31:0] remainder_negated;
+	wire [31:0] o_remainder;
+	CarryLookaheadAdder negator_remainder(
+		.a(~o_remainder),
+		.b(32'b00000000000000000000000000000000),
+		.cin(1'b1),
+		.sum(remainder_negated)
+	);
+	wire [31:0] i_dividend;
+	wire [31:0] i_divisor;
+	DividerUnsigned divider(
+		.i_dividend(i_dividend),
+		.i_divisor(i_divisor),
+		.o_remainder(o_remainder),
+		.o_quotient(o_quotient)
+	);
 	reg illegal_insn;
 	reg we_logic;
 	reg [31:0] rd_data_logic;
 	reg [31:0] a_logic;
 	reg [31:0] b_logic;
 	reg carry_in_logic;
+	reg [63:0] multiplication_result;
+	reg [31:0] i_dividend_logic;
+	reg [31:0] i_divisor_logic;
+	reg [31:0] offset;
 	assign we = we_logic;
 	assign rd_data = rd_data_logic;
 	assign a = a_logic;
 	assign b = b_logic;
 	assign carry_in = carry_in_logic;
+	assign i_dividend = i_dividend_logic;
+	assign i_divisor = i_divisor_logic;
 	always @(*) begin
 		if (_sv2v_0)
 			;
 		illegal_insn = 1'b0;
 		halt = 1'b0;
+		addr_to_dmem = 32'b00000000000000000000000000000000;
+		store_data_to_dmem = 32'b00000000000000000000000000000000;
+		store_we_to_dmem = 4'b0000;
 		we_logic = 1'b0;
 		rd_data_logic = 32'b00000000000000000000000000000000;
 		a_logic = 32'b00000000000000000000000000000000;
 		b_logic = 32'b00000000000000000000000000000000;
 		carry_in_logic = 1'b0;
 		pcNext = pcCurrent + 4;
+		multiplication_result = 64'b0000000000000000000000000000000000000000000000000000000000000000;
+		i_dividend_logic = 32'b00000000000000000000000000000000;
+		i_divisor_logic = 32'b00000000000000000000000000000000;
+		offset = 32'b00000000000000000000000000000000;
 		case (insn_opcode)
 			OpLui: begin
 				we_logic = 1'b1;
-				rd_data_logic[31:12] = insn_from_imem[31:12];
+				rd_data_logic = {insn_from_imem[31:12], 12'b000000000000};
+			end
+			OpAuipc: begin
+				we_logic = 1'b1;
+				rd_data_logic = pcCurrent + {insn_from_imem[31:12], 12'b000000000000};
+			end
+			OpJal: begin
+				we_logic = 1'b1;
+				rd_data_logic = pcCurrent + 4;
+				pcNext = pcCurrent + imm_j_sext;
+			end
+			OpJalr: begin
+				we_logic = 1'b1;
+				rd_data_logic = pcCurrent + 4;
+				pcNext = (rs1_data + imm_i_sext) & ~32'b00000000000000000000000000000001;
 			end
 			OpBranch:
 				if (insn_beq) begin
@@ -417,6 +567,50 @@ module DatapathSingleCycle (
 				end
 				else
 					illegal_insn = 1'b1;
+			OpLoad: begin
+				addr_to_dmem = (rs1_data + imm_i_sext) & ~32'b00000000000000000000000000000011;
+				offset = (rs1_data + imm_i_sext) & 32'b00000000000000000000000000000011;
+				if (insn_lb) begin
+					we_logic = 1'b1;
+					rd_data_logic = {{24 {load_data_from_dmem[(offset * 8) + 7]}}, load_data_from_dmem[offset * 8+:8]};
+				end
+				else if (insn_lh) begin
+					we_logic = 1'b1;
+					rd_data_logic = {{16 {load_data_from_dmem[(offset[1] * 16) + 15]}}, load_data_from_dmem[offset[1] * 16+:16]};
+				end
+				else if (insn_lw) begin
+					we_logic = 1'b1;
+					rd_data_logic = load_data_from_dmem[31:0];
+				end
+				else if (insn_lbu) begin
+					we_logic = 1'b1;
+					rd_data_logic = {24'b000000000000000000000000, load_data_from_dmem[offset * 8+:8]};
+				end
+				else if (insn_lhu) begin
+					we_logic = 1'b1;
+					rd_data_logic = {16'b0000000000000000, load_data_from_dmem[offset[1] * 16+:16]};
+				end
+				else
+					illegal_insn = 1'b1;
+			end
+			OpStore: begin
+				addr_to_dmem = (rs1_data + imm_s_sext) & ~32'b00000000000000000000000000000011;
+				offset = (rs1_data + imm_s_sext) & 32'b00000000000000000000000000000011;
+				if (insn_sb) begin
+					store_data_to_dmem[offset * 8+:8] = rs2_data[7:0];
+					store_we_to_dmem = 4'b0001 << offset;
+				end
+				else if (insn_sh) begin
+					store_data_to_dmem[offset[1] * 16+:16] = rs2_data[15:0];
+					store_we_to_dmem = 4'b0011 << offset;
+				end
+				else if (insn_sw) begin
+					store_data_to_dmem = rs2_data;
+					store_we_to_dmem = 4'b1111;
+				end
+				else
+					illegal_insn = 1'b1;
+			end
 			OpRegImm: begin
 				we_logic = 1'b1;
 				if (insn_addi) begin
@@ -472,6 +666,44 @@ module DatapathSingleCycle (
 					rd_data_logic = rs1_data | rs2_data;
 				else if (insn_and)
 					rd_data_logic = rs1_data & rs2_data;
+				else if (insn_mul) begin
+					multiplication_result = rs1_data * rs2_data;
+					rd_data_logic = multiplication_result[31:0];
+				end
+				else if (insn_mulh) begin
+					multiplication_result = $signed(rs1_data) * $signed(rs2_data);
+					rd_data_logic = multiplication_result[63:32];
+				end
+				else if (insn_mulhsu) begin
+					multiplication_result = $signed(rs1_data) * $signed({1'b0, rs2_data});
+					rd_data_logic = multiplication_result[63:32];
+				end
+				else if (insn_mulhu) begin
+					multiplication_result = rs1_data * rs2_data;
+					rd_data_logic = multiplication_result[63:32];
+				end
+				else if (insn_div) begin
+					i_dividend_logic = (rs1_data[31] ? rs1_negated : rs1_data);
+					i_divisor_logic = (rs2_data[31] ? rs2_negated : rs2_data);
+					rd_data_logic = (rs1_data[31] ^ rs2_data[31] ? quotient_negated : o_quotient);
+					rd_data_logic = (rs2_data == 32'b00000000000000000000000000000000 ? ~32'b00000000000000000000000000000000 : rd_data_logic);
+				end
+				else if (insn_divu) begin
+					i_dividend_logic = rs1_data;
+					i_divisor_logic = rs2_data;
+					rd_data_logic = (rs2_data == 32'b00000000000000000000000000000000 ? ~32'b00000000000000000000000000000000 : o_quotient);
+				end
+				else if (insn_rem) begin
+					i_dividend_logic = (rs1_data[31] ? rs1_negated : rs1_data);
+					i_divisor_logic = (rs2_data[31] ? rs2_negated : rs2_data);
+					rd_data_logic = (rs1_data[31] ? remainder_negated : o_remainder);
+					rd_data_logic = (rs2_data == 32'b00000000000000000000000000000000 ? rs1_data : rd_data_logic);
+				end
+				else if (insn_remu) begin
+					i_dividend_logic = rs1_data;
+					i_divisor_logic = rs2_data;
+					rd_data_logic = (rs2_data == 32'b00000000000000000000000000000000 ? rs1_data : o_remainder);
+				end
 				else
 					illegal_insn = 1'b1;
 			end

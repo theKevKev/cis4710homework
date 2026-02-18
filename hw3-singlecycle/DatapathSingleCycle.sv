@@ -325,7 +325,11 @@ module DatapathSingleCycle (
     case (insn_opcode)
       OpLui: begin
         we_logic = 1'b1;
-        rd_data_logic[31:12] = insn_from_imem[31:12];
+        rd_data_logic = {insn_from_imem[31:12], 12'b0};
+      end
+      OpAuipc: begin
+        we_logic = 1'b1;
+        rd_data_logic = pcCurrent + {insn_from_imem[31:12], 12'b0};
       end
       OpJal: begin
         we_logic = 1'b1;
@@ -371,35 +375,39 @@ module DatapathSingleCycle (
         offset = (rs1_data + imm_i_sext) & 32'b11;
         if (insn_lb) begin
           we_logic = 1'b1;
-          rd_data_logic = {{24{load_data_from_dmem[(offset*8)+7]}}, load_data_from_dmem[offset*8 +: 8]};
+          rd_data_logic = {
+            {24{load_data_from_dmem[(offset*8)+7]}}, load_data_from_dmem[offset*8+:8]
+          };
         end else if (insn_lh) begin
           we_logic = 1'b1;
-          rd_data_logic = {{16{load_data_from_dmem[(offset[1]*16)+15]}}, load_data_from_dmem[offset[1]*16 +: 16]};
+          rd_data_logic = {
+            {16{load_data_from_dmem[(offset[1]*16)+15]}}, load_data_from_dmem[offset[1]*16+:16]
+          };
         end else if (insn_lw) begin
           we_logic = 1'b1;
           rd_data_logic = load_data_from_dmem[31:0];
         end else if (insn_lbu) begin
           we_logic = 1'b1;
-          rd_data_logic = {24'b0, load_data_from_dmem[offset*8 +: 8]};
+          rd_data_logic = {24'b0, load_data_from_dmem[offset*8+:8]};
         end else if (insn_lhu) begin
           we_logic = 1'b1;
-          rd_data_logic = {16'b0, load_data_from_dmem[offset[1]*16 +: 16]};
+          rd_data_logic = {16'b0, load_data_from_dmem[offset[1]*16+:16]};
         end else begin
           illegal_insn = 1'b1;
         end
       end
       OpStore: begin
-        addr_to_dmem = (rs1_data + imm_i_sext) & ~32'b11;
-        offset = (rs1_data + imm_i_sext) & 32'b11;
+        addr_to_dmem = (rs1_data + imm_s_sext) & ~32'b11;
+        offset = (rs1_data + imm_s_sext) & 32'b11;
         if (insn_sb) begin
-          store_data_to_dmem[offset*8 +: 8] = rs2_data[7:0];
+          store_data_to_dmem[offset*8+:8] = rs2_data[7:0];
           store_we_to_dmem = 4'b0001 << offset;
         end else if (insn_sh) begin
-          store_data_to_dmem[offset[1]*16 +: 16] = rs2_data[15:0];
+          store_data_to_dmem[offset[1]*16+:16] = rs2_data[15:0];
           store_we_to_dmem = 4'b0011 << offset;
         end else if (insn_sw) begin
           store_data_to_dmem = rs2_data;
-          store_we_to_dmem = 4'b1111;
+          store_we_to_dmem   = 4'b1111;
         end else begin
           illegal_insn = 1'b1;
         end
@@ -478,21 +486,23 @@ module DatapathSingleCycle (
           i_divisor_logic = rs2_data[31] ? rs2_negated : rs2_data;
 
           rd_data_logic = (rs1_data[31] ^ rs2_data[31]) ? quotient_negated : o_quotient;
+          rd_data_logic = (rs2_data == 32'b0) ? ~32'b0 : rd_data_logic;
         end else if (insn_divu) begin
           i_dividend_logic = rs1_data;
           i_divisor_logic = rs2_data;
 
-          rd_data_logic = o_quotient;
+          rd_data_logic = (rs2_data == 32'b0) ? ~32'b0 : o_quotient;
         end else if (insn_rem) begin
           i_dividend_logic = rs1_data[31] ? rs1_negated : rs1_data;
           i_divisor_logic = rs2_data[31] ? rs2_negated : rs2_data;
 
           rd_data_logic = rs1_data[31] ? remainder_negated : o_remainder;
+          rd_data_logic = (rs2_data == 32'b0) ? rs1_data : rd_data_logic;
         end else if (insn_remu) begin
           i_dividend_logic = rs1_data;
           i_divisor_logic = rs2_data;
 
-          rd_data_logic = o_remainder;
+          rd_data_logic = (rs2_data == 32'b0) ? rs1_data : o_remainder;
         end else begin
           illegal_insn = 1'b1;
         end
