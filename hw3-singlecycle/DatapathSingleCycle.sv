@@ -263,6 +263,7 @@ module DatapathSingleCycle (
   logic [63:0] multiplication_result;
   logic [31:0] i_dividend_logic;  // these are fixed at 31:0 cuz our divider only works for 32 lol
   logic [31:0] i_divisor_logic;
+  logic [`REG_SIZE] offset;
 
   assign we = we_logic;
   assign rd_data = rd_data_logic;
@@ -276,6 +277,8 @@ module DatapathSingleCycle (
     illegal_insn = 1'b0;
     halt = 1'b0;
     addr_to_dmem = 32'b0;
+    store_data_to_dmem = 32'b0;
+    store_we_to_dmem = 4'b0;
     we_logic = 1'b0;
     rd_data_logic = 32'b0;
     a_logic = 32'b0;
@@ -285,6 +288,7 @@ module DatapathSingleCycle (
     multiplication_result = 64'b0;
     i_dividend_logic = 32'b0;
     i_divisor_logic = 32'b0;
+    offset = 32'b0;
 
     case (insn_opcode)
       OpLui: begin
@@ -331,15 +335,43 @@ module DatapathSingleCycle (
         end
       end
       OpLoad: begin
+        addr_to_dmem = (rs1_data + imm_i_sext) & ~32'b11;
+        offset = (rs1_data + imm_i_sext) & 32'b11;
         if (insn_lb) begin
-          addr_to_dmem = rs1_data + imm_i_sext;
-          rd_data_logic = {{24{load_data_from_dmem[7]}}, load_data_from_dmem[7:0]};
+          we_logic = 1'b1;
+          rd_data_logic = {{24{load_data_from_dmem[(offset*8)+7]}}, load_data_from_dmem[offset*8 +: 8]};
+        end else if (insn_lh) begin
+          we_logic = 1'b1;
+          rd_data_logic = {{16{load_data_from_dmem[(offset[1]*16)+15]}}, load_data_from_dmem[offset[1]*16 +: 16]};
+        end else if (insn_lw) begin
+          we_logic = 1'b1;
+          rd_data_logic = load_data_from_dmem[31:0];
+        end else if (insn_lbu) begin
+          we_logic = 1'b1;
+          rd_data_logic = {24'b0, load_data_from_dmem[offset*8 +: 8]};
+        end else if (insn_lhu) begin
+          we_logic = 1'b1;
+          rd_data_logic = {16'b0, load_data_from_dmem[offset[1]*16 +: 16]};
         end else begin
           illegal_insn = 1'b1;
         end
       end
-      // OpStore: begin
-      // end
+      OpStore: begin
+        addr_to_dmem = (rs1_data + imm_i_sext) & ~32'b11;
+        offset = (rs1_data + imm_i_sext) & 32'b11;
+        if (insn_sb) begin
+          store_data_to_dmem[offset*8 +: 8] = rs2_data[7:0];
+          store_we_to_dmem = 4'b0001 << offset;
+        end else if (insn_sh) begin
+          store_data_to_dmem[offset[1]*16 +: 16] = rs2_data[15:0];
+          store_we_to_dmem = 4'b0011 << offset;
+        end else if (insn_sw) begin
+          store_data_to_dmem = rs2_data;
+          store_we_to_dmem = 4'b1111;
+        end else begin
+          illegal_insn = 1'b1;
+        end
+      end
       OpRegImm: begin
         we_logic = 1'b1;
         if (insn_addi) begin
