@@ -243,18 +243,34 @@ module DatapathSingleCycle (
       .sum(sum)
   );
 
+  wire [31:0] i_dividend;
+  wire [31:0] i_divisor;
+  wire [31:0] o_remainder;
+  wire [31:0] o_quotient;
+  DividerUnsigned divider (
+      .i_dividend (i_dividend),
+      .i_divisor  (i_divisor),
+      .o_remainder(o_remainder),
+      .o_quotient (o_quotient)
+  );
+
   logic illegal_insn;
   logic we_logic;
   logic [`REG_SIZE] rd_data_logic;
   logic [`REG_SIZE] a_logic;
   logic [`REG_SIZE] b_logic;
   logic carry_in_logic;
+  logic [63:0] multiplication_result;
+  logic [31:0] i_dividend_logic;  // these are fixed at 31:0 cuz our divider only works for 32 lol
+  logic [31:0] i_divisor_logic;
 
   assign we = we_logic;
   assign rd_data = rd_data_logic;
   assign a = a_logic;
   assign b = b_logic;
   assign carry_in = carry_in_logic;
+  assign i_dividend = i_dividend_logic;
+  assign i_divisor = i_divisor_logic;
 
   always_comb begin
     illegal_insn = 1'b0;
@@ -266,6 +282,9 @@ module DatapathSingleCycle (
     b_logic = 32'b0;
     carry_in_logic = 1'b0;
     pcNext = pcCurrent + 4;
+    multiplication_result = 64'b0;
+    i_dividend_logic = 32'b0;
+    i_divisor_logic = 32'b0;
 
     case (insn_opcode)
       OpLui: begin
@@ -378,22 +397,38 @@ module DatapathSingleCycle (
           rd_data_logic = rs1_data | rs2_data;
         end else if (insn_and) begin
           rd_data_logic = rs1_data & rs2_data;
-          // end else if (insn_mul) begin 
-          //   rd_data_logic = (rs1_data * rs2_data)[31:0];
-          // end else if (insn_mulh) begin 
-          //   rd_data_logic = ($signed(rs1_data) * $signed(rs2_data))[63:32];
-          // end else if (insn_mulhsu) begin 
-          //   rd_data_logic = ($signed(rs1_data) * rs2_data)[63:32];
-          // end else if (insn_mulhu) begin 
-          //   rd_data_logic = (rs1_data * rs2_data)[63:32];
-          // end else if (insn_div) begin // todo
-          //   rd_data_logic = rs1_data * rs2_data;
-          // end else if (insn_divu) begin // todo
-          //   rd_data_logic = rs1_data * rs2_data;
-          // end else if (insn_rem) begin // todo
-          //   rd_data_logic = rs1_data * rs2_data;
-          // end else if (insn_remu) begin // todo
-          //   rd_data_logic = rs1_data * rs2_data;
+        end else if (insn_mul) begin
+          multiplication_result = rs1_data * rs2_data;
+          rd_data_logic = multiplication_result[31:0];
+        end else if (insn_mulh) begin
+          multiplication_result = $signed(rs1_data) * $signed(rs2_data);
+          rd_data_logic = multiplication_result[63:32];
+        end else if (insn_mulhsu) begin
+          multiplication_result = $signed(rs1_data) * rs2_data;
+          rd_data_logic = multiplication_result[63:32];
+        end else if (insn_mulhu) begin
+          multiplication_result = rs1_data * rs2_data;
+          rd_data_logic = multiplication_result[63:32];
+        end else if (insn_div) begin  // and i'd guess this doesn't work either
+          i_dividend_logic = $signed(rs1_data);
+          i_divisor_logic = $signed(rs2_data);
+
+          rd_data_logic = o_quotient;
+        end else if (insn_divu) begin
+          i_dividend_logic = rs1_data;
+          i_divisor_logic = rs2_data;
+
+          rd_data_logic = o_quotient;
+        end else if (insn_rem) begin  // surely this doesn't work
+          i_dividend_logic = $signed(rs1_data);
+          i_divisor_logic = $signed(rs2_data);
+
+          rd_data_logic = o_remainder;
+        end else if (insn_remu) begin
+          i_dividend_logic = rs1_data;
+          i_divisor_logic = rs2_data;
+
+          rd_data_logic = o_remainder;
         end else begin
           illegal_insn = 1'b1;
         end
