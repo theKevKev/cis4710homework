@@ -259,6 +259,7 @@ module DatapathSingleCycle (
   always_comb begin
     illegal_insn = 1'b0;
     halt = 1'b0;
+    addr_to_dmem = 32'b0;
     we_logic = 1'b0;
     rd_data_logic = 32'b0;
     a_logic = 32'b0;
@@ -310,8 +311,14 @@ module DatapathSingleCycle (
           illegal_insn = 1'b1;
         end
       end
-      // OpLoad: begin
-      // end
+      OpLoad: begin
+        if (insn_lb) begin
+          addr_to_dmem = rs1_data + imm_i_sext;
+          rd_data_logic = {{24{load_data_from_dmem[7]}}, load_data_from_dmem[7:0]};
+        end else begin
+          illegal_insn = 1'b1;
+        end
+      end
       // OpStore: begin
       // end
       OpRegImm: begin
