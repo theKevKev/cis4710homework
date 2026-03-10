@@ -11,6 +11,9 @@
 // RV opcodes are 7 bits
 `define OPCODE_SIZE 6:0
 
+// divider stages is 8
+`define N_DIVIDER_STAGES 8
+
 `include "../hw2b-cla/CarryLookaheadAdder.sv"
 `include "DividerUnsignedPipelined.sv"
 `include "../hw3-singlecycle/cycle_status.sv"
@@ -28,7 +31,25 @@ module RegFile (
     input logic rst
 );
 
-  // TODO: copy your HW3B code here
+  localparam int NumRegs = 32;
+  logic [`REG_SIZE] regs[NumRegs];
+
+  assign regs[0]  = 32'd0;  // x0 is always zero
+  assign rs1_data = regs[rs1];  // 1st read port
+  assign rs2_data = regs[rs2];  // 2nd read port
+
+  genvar i;
+  for (i = 1; i < 32; i = i + 1) begin
+    always_ff @(posedge clk) begin
+      if (rst) begin
+        regs[i] <= 32'd0;
+      end else begin
+        if (we && rd == i) begin
+          regs[i] <= rd_data;
+        end
+      end
+    end
+  end
 
 endmodule
 
@@ -48,7 +69,479 @@ module DatapathMultiCycle (
     output cycle_status_e     trace_completed_cycle_status
 );
 
-  // TODO: your code here (largely based on HW3B)
+  // components of the instruction
+  wire [6:0] insn_funct7;
+  wire [4:0] insn_rs2;
+  wire [4:0] insn_rs1;
+  wire [2:0] insn_funct3;
+  wire [4:0] insn_rd;
+  wire [`OPCODE_SIZE] insn_opcode;
+
+  // split R-type instruction - see section 2.2 of RiscV spec
+  assign {insn_funct7, insn_rs2, insn_rs1, insn_funct3, insn_rd, insn_opcode} = insn_from_imem;
+
+  // setup for I, S, B & J type instructions
+  // I - short immediates and loads
+  wire [11:0] imm_i;
+  assign imm_i = insn_from_imem[31:20];
+  wire [ 4:0] imm_shamt = insn_from_imem[24:20];
+
+  // S - stores
+  wire [11:0] imm_s;
+  assign imm_s[11:5] = insn_funct7, imm_s[4:0] = insn_rd;
+
+  // B - conditionals
+  wire [12:0] imm_b;
+  assign {imm_b[12], imm_b[10:5]} = insn_funct7, {imm_b[4:1], imm_b[11]} = insn_rd, imm_b[0] = 1'b0;
+
+  // J - unconditional jumps
+  wire [20:0] imm_j;
+  assign {imm_j[20], imm_j[10:1], imm_j[11], imm_j[19:12], imm_j[0]} = {
+    insn_from_imem[31:12], 1'b0
+  };
+
+  wire [`REG_SIZE] imm_i_sext = {{20{imm_i[11]}}, imm_i[11:0]};
+  wire [`REG_SIZE] imm_s_sext = {{20{imm_s[11]}}, imm_s[11:0]};
+  wire [`REG_SIZE] imm_b_sext = {{19{imm_b[12]}}, imm_b[12:0]};
+  wire [`REG_SIZE] imm_j_sext = {{11{imm_j[20]}}, imm_j[20:0]};
+
+  // opcodes - see section 19 of RiscV spec
+  localparam bit [`OPCODE_SIZE] OpLoad = 7'b00_000_11;
+  localparam bit [`OPCODE_SIZE] OpStore = 7'b01_000_11;
+  localparam bit [`OPCODE_SIZE] OpBranch = 7'b11_000_11;
+  localparam bit [`OPCODE_SIZE] OpJalr = 7'b11_001_11;
+  localparam bit [`OPCODE_SIZE] OpMiscMem = 7'b00_011_11;
+  localparam bit [`OPCODE_SIZE] OpJal = 7'b11_011_11;
+
+  localparam bit [`OPCODE_SIZE] OpRegImm = 7'b00_100_11;
+  localparam bit [`OPCODE_SIZE] OpRegReg = 7'b01_100_11;
+  localparam bit [`OPCODE_SIZE] OpEnviron = 7'b11_100_11;
+
+  localparam bit [`OPCODE_SIZE] OpAuipc = 7'b00_101_11;
+  localparam bit [`OPCODE_SIZE] OpLui = 7'b01_101_11;
+
+  wire insn_lui = insn_opcode == OpLui;
+  wire insn_auipc = insn_opcode == OpAuipc;
+  wire insn_jal = insn_opcode == OpJal;
+  wire insn_jalr = insn_opcode == OpJalr;
+
+  wire insn_beq = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b000;
+  wire insn_bne = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b001;
+  wire insn_blt = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b100;
+  wire insn_bge = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b101;
+  wire insn_bltu = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b110;
+  wire insn_bgeu = insn_opcode == OpBranch && insn_from_imem[14:12] == 3'b111;
+
+  wire insn_lb = insn_opcode == OpLoad && insn_from_imem[14:12] == 3'b000;
+  wire insn_lh = insn_opcode == OpLoad && insn_from_imem[14:12] == 3'b001;
+  wire insn_lw = insn_opcode == OpLoad && insn_from_imem[14:12] == 3'b010;
+  wire insn_lbu = insn_opcode == OpLoad && insn_from_imem[14:12] == 3'b100;
+  wire insn_lhu = insn_opcode == OpLoad && insn_from_imem[14:12] == 3'b101;
+
+  wire insn_sb = insn_opcode == OpStore && insn_from_imem[14:12] == 3'b000;
+  wire insn_sh = insn_opcode == OpStore && insn_from_imem[14:12] == 3'b001;
+  wire insn_sw = insn_opcode == OpStore && insn_from_imem[14:12] == 3'b010;
+
+  wire insn_addi = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b000;
+  wire insn_slti = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b010;
+  wire insn_sltiu = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b011;
+  wire insn_xori = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b100;
+  wire insn_ori = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b110;
+  wire insn_andi = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b111;
+
+  wire insn_slli = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b001 && insn_from_imem[31:25] == 7'd0;
+  wire insn_srli = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b101 && insn_from_imem[31:25] == 7'd0;
+  wire insn_srai = insn_opcode == OpRegImm && insn_from_imem[14:12] == 3'b101 && insn_from_imem[31:25] == 7'b0100000;
+
+  wire insn_add  = insn_opcode == OpRegReg && insn_from_imem[14:12] == 3'b000 && insn_from_imem[31:25] == 7'd0;
+  wire insn_sub  = insn_opcode == OpRegReg && insn_from_imem[14:12] == 3'b000 && insn_from_imem[31:25] == 7'b0100000;
+  wire insn_sll  = insn_opcode == OpRegReg && insn_from_imem[14:12] == 3'b001 && insn_from_imem[31:25] == 7'd0;
+  wire insn_slt  = insn_opcode == OpRegReg && insn_from_imem[14:12] == 3'b010 && insn_from_imem[31:25] == 7'd0;
+  wire insn_sltu = insn_opcode == OpRegReg && insn_from_imem[14:12] == 3'b011 && insn_from_imem[31:25] == 7'd0;
+  wire insn_xor  = insn_opcode == OpRegReg && insn_from_imem[14:12] == 3'b100 && insn_from_imem[31:25] == 7'd0;
+  wire insn_srl  = insn_opcode == OpRegReg && insn_from_imem[14:12] == 3'b101 && insn_from_imem[31:25] == 7'd0;
+  wire insn_sra  = insn_opcode == OpRegReg && insn_from_imem[14:12] == 3'b101 && insn_from_imem[31:25] == 7'b0100000;
+  wire insn_or   = insn_opcode == OpRegReg && insn_from_imem[14:12] == 3'b110 && insn_from_imem[31:25] == 7'd0;
+  wire insn_and  = insn_opcode == OpRegReg && insn_from_imem[14:12] == 3'b111 && insn_from_imem[31:25] == 7'd0;
+
+  wire insn_mul    = insn_opcode == OpRegReg && insn_from_imem[31:25] == 7'd1 && insn_from_imem[14:12] == 3'b000;
+  wire insn_mulh   = insn_opcode == OpRegReg && insn_from_imem[31:25] == 7'd1 && insn_from_imem[14:12] == 3'b001;
+  wire insn_mulhsu = insn_opcode == OpRegReg && insn_from_imem[31:25] == 7'd1 && insn_from_imem[14:12] == 3'b010;
+  wire insn_mulhu  = insn_opcode == OpRegReg && insn_from_imem[31:25] == 7'd1 && insn_from_imem[14:12] == 3'b011;
+  wire insn_div    = insn_opcode == OpRegReg && insn_from_imem[31:25] == 7'd1 && insn_from_imem[14:12] == 3'b100;
+  wire insn_divu   = insn_opcode == OpRegReg && insn_from_imem[31:25] == 7'd1 && insn_from_imem[14:12] == 3'b101;
+  wire insn_rem    = insn_opcode == OpRegReg && insn_from_imem[31:25] == 7'd1 && insn_from_imem[14:12] == 3'b110;
+  wire insn_remu   = insn_opcode == OpRegReg && insn_from_imem[31:25] == 7'd1 && insn_from_imem[14:12] == 3'b111;
+  wire is_div_cycle = (insn_div || insn_divu || insn_rem || insn_remu);
+
+  wire insn_ecall = insn_opcode == OpEnviron && insn_from_imem[31:7] == 25'd0;
+  wire insn_fence = insn_opcode == OpMiscMem;
+
+  // this code is only for simulation, not synthesis
+`ifndef SYNTHESIS
+  `include "../hw3-singlecycle/RvDisassembler.sv"
+  string disasm_string;
+  always_comb begin
+    disasm_string = rv_disasm(insn_from_imem);
+  end
+  // HACK: get disasm_string to appear in GtkWave, which can apparently show only wire/logic...
+  wire [(8*32)-1:0] disasm_wire;
+  genvar i;
+  for (i = 0; i < 32; i = i + 1) begin : gen_disasm
+    assign disasm_wire[(((i+1))*8)-1:((i)*8)] = disasm_string[31-i];
+  end
+`endif
+
+  // counters (program, insn, cycle)
+  logic [`REG_SIZE] pcNext, pcCurrent;
+  logic [`REG_SIZE] cycles_current, num_insns_current;
+  logic [3:0] div_cycles_current;
+  always @(posedge clk) begin
+    if (rst) begin
+      div_cycles_current <= 0;
+      cycles_current <= 0;
+      pcCurrent <= 32'd0;
+      num_insns_current <= 0;
+    end else begin
+      div_cycles_current <= (is_div_cycle && div_cycles_current < `N_DIVIDER_STAGES) ? div_cycles_current + 1 : 0;
+      cycles_current <= cycles_current + 1;
+      if (!is_div_cycle || div_cycles_current == `N_DIVIDER_STAGES) begin
+        pcCurrent <= pcNext;
+        num_insns_current <= num_insns_current + 1;
+      end
+    end
+  end
+  assign pc_to_imem = pcCurrent;
+
+  // NOTE: don't rename your RegFile instance as the tests expect it to be `rf`
+  wire we;
+  wire [`REG_SIZE] rd_data;
+  wire [`REG_SIZE] rs1_data;
+  wire [`REG_SIZE] rs2_data;
+  RegFile rf (
+      .clk(clk),
+      .rst(rst),
+      .we(we),
+      .rd(insn_rd),
+      .rd_data(rd_data),
+      .rs1(insn_rs1),
+      .rs2(insn_rs2),
+      .rs1_data(rs1_data),
+      .rs2_data(rs2_data)
+  );
+
+  wire [`REG_SIZE] a;
+  wire [`REG_SIZE] b;
+  wire carry_in;
+  wire [`REG_SIZE] sum;
+  CarryLookaheadAdder cla (
+      .a  (a),
+      .b  (b),
+      .cin(carry_in),
+      .sum(sum)
+  );
+
+  wire [`REG_SIZE] rs1_negated;
+  CarryLookaheadAdder negator_rs1 (
+      .a  (~rs1_data),   // Invert bits
+      .b  (32'b0),       // Add 0
+      .cin(1'b1),        // Add 1 (via carry-in)
+      .sum(rs1_negated)  // Result is -rs1
+  );
+
+  wire [`REG_SIZE] rs2_negated;
+  CarryLookaheadAdder negator_rs2 (
+      .a  (~rs2_data),   // Invert bits
+      .b  (32'b0),       // Add 0
+      .cin(1'b1),        // Add 1 (via carry-in)
+      .sum(rs2_negated)  // Result is -rs1
+  );
+
+  wire [`REG_SIZE] quotient_negated;
+  CarryLookaheadAdder negator_quotient (
+      .a  (~o_quotient),      // Invert bits
+      .b  (32'b0),            // Add 0
+      .cin(1'b1),             // Add 1 (via carry-in)
+      .sum(quotient_negated)  // Result is -rs1
+  );
+
+  wire [`REG_SIZE] remainder_negated;
+  CarryLookaheadAdder negator_remainder (
+      .a  (~o_remainder),      // Invert bits
+      .b  (32'b0),             // Add 0
+      .cin(1'b1),              // Add 1 (via carry-in)
+      .sum(remainder_negated)  // Result is -rs1
+  );
+
+  wire [31:0] i_dividend;
+  wire [31:0] i_divisor;
+  wire [31:0] o_remainder;
+  wire [31:0] o_quotient;
+  DividerUnsignedPipelined divider (
+      .clk(clk),
+      .rst(rst),
+      .stall(1'b0),
+      .i_dividend (i_dividend),
+      .i_divisor  (i_divisor),
+      .o_remainder(o_remainder),
+      .o_quotient (o_quotient)
+  );
+
+  logic illegal_insn;
+  logic we_logic;
+  logic [`REG_SIZE] rd_data_logic;
+  logic [`REG_SIZE] a_logic;
+  logic [`REG_SIZE] b_logic;
+  logic carry_in_logic;
+  logic [63:0] multiplication_result;
+  logic [31:0] i_dividend_logic;  // these are fixed at 31:0 cuz our divider only works for 32 lol
+  logic [31:0] i_divisor_logic;
+  logic [`REG_SIZE] offset;
+
+  assign we = we_logic;
+  assign rd_data = rd_data_logic;
+  assign a = a_logic;
+  assign b = b_logic;
+  assign carry_in = carry_in_logic;
+  assign i_dividend = i_dividend_logic;
+  assign i_divisor = i_divisor_logic;
+
+  always_comb begin
+    illegal_insn = 1'b0;
+    halt = 1'b0;
+    addr_to_dmem = 32'b0;
+    store_data_to_dmem = 32'b0;
+    store_we_to_dmem = 4'b0;
+    we_logic = 1'b0;
+    rd_data_logic = 32'b0;
+    a_logic = 32'b0;
+    b_logic = 32'b0;
+    carry_in_logic = 1'b0;
+    pcNext = pcCurrent + 4;
+    multiplication_result = 64'b0;
+    i_dividend_logic = 32'b0;
+    i_divisor_logic = 32'b0;
+    offset = 32'b0;
+
+    case (insn_opcode)
+      OpLui: begin
+        we_logic = 1'b1;
+        rd_data_logic = {insn_from_imem[31:12], 12'b0};
+      end
+      OpAuipc: begin
+        we_logic = 1'b1;
+        rd_data_logic = pcCurrent + {insn_from_imem[31:12], 12'b0};
+      end
+      OpJal: begin
+        we_logic = 1'b1;
+        rd_data_logic = pcCurrent + 4;
+        pcNext = pcCurrent + imm_j_sext;
+      end
+      OpJalr: begin
+        we_logic = 1'b1;
+        rd_data_logic = pcCurrent + 4;
+        pcNext = (rs1_data + imm_i_sext) & ~32'b1;
+      end
+      OpBranch: begin
+        if (insn_beq) begin
+          if (rs1_data == rs2_data) begin
+            pcNext = pcCurrent + imm_b_sext;
+          end
+        end else if (insn_bne) begin
+          if (rs1_data != rs2_data) begin
+            pcNext = pcCurrent + imm_b_sext;
+          end
+        end else if (insn_blt) begin
+          if ($signed(rs1_data) < $signed(rs2_data)) begin
+            pcNext = pcCurrent + imm_b_sext;
+          end
+        end else if (insn_bge) begin
+          if ($signed(rs1_data) >= $signed(rs2_data)) begin
+            pcNext = pcCurrent + imm_b_sext;
+          end
+        end else if (insn_bltu) begin
+          if (rs1_data < rs2_data) begin
+            pcNext = pcCurrent + imm_b_sext;
+          end
+        end else if (insn_bgeu) begin
+          if (rs1_data >= rs2_data) begin
+            pcNext = pcCurrent + imm_b_sext;
+          end
+        end else begin
+          illegal_insn = 1'b1;
+        end
+      end
+      OpLoad: begin
+        addr_to_dmem = (rs1_data + imm_i_sext) & ~32'b11;
+        offset = (rs1_data + imm_i_sext) & 32'b11;
+        if (insn_lb) begin
+          we_logic = 1'b1;
+          rd_data_logic = {
+            {24{load_data_from_dmem[(offset*8)+7]}}, load_data_from_dmem[offset*8+:8]
+          };
+        end else if (insn_lh) begin
+          we_logic = 1'b1;
+          rd_data_logic = {
+            {16{load_data_from_dmem[(offset[1]*16)+15]}}, load_data_from_dmem[offset[1]*16+:16]
+          };
+        end else if (insn_lw) begin
+          we_logic = 1'b1;
+          rd_data_logic = load_data_from_dmem[31:0];
+        end else if (insn_lbu) begin
+          we_logic = 1'b1;
+          rd_data_logic = {24'b0, load_data_from_dmem[offset*8+:8]};
+        end else if (insn_lhu) begin
+          we_logic = 1'b1;
+          rd_data_logic = {16'b0, load_data_from_dmem[offset[1]*16+:16]};
+        end else begin
+          illegal_insn = 1'b1;
+        end
+      end
+      OpStore: begin
+        addr_to_dmem = (rs1_data + imm_s_sext) & ~32'b11;
+        offset = (rs1_data + imm_s_sext) & 32'b11;
+        if (insn_sb) begin
+          store_data_to_dmem[offset*8+:8] = rs2_data[7:0];
+          store_we_to_dmem = 4'b0001 << offset;
+        end else if (insn_sh) begin
+          store_data_to_dmem[offset[1]*16+:16] = rs2_data[15:0];
+          store_we_to_dmem = 4'b0011 << offset;
+        end else if (insn_sw) begin
+          store_data_to_dmem = rs2_data;
+          store_we_to_dmem   = 4'b1111;
+        end else begin
+          illegal_insn = 1'b1;
+        end
+      end
+      OpRegImm: begin
+        we_logic = 1'b1;
+        if (insn_addi) begin
+          a_logic = rs1_data;
+          b_logic = imm_i_sext;
+
+          rd_data_logic = sum;
+        end else if (insn_slti) begin
+          rd_data_logic = $signed(rs1_data) < $signed(imm_i_sext) ? 1 : 0;
+        end else if (insn_sltiu) begin
+          rd_data_logic = rs1_data < imm_i_sext ? 1 : 0;
+        end else if (insn_xori) begin
+          rd_data_logic = rs1_data ^ imm_i_sext;
+        end else if (insn_ori) begin
+          rd_data_logic = rs1_data | imm_i_sext;
+        end else if (insn_andi) begin
+          rd_data_logic = rs1_data & imm_i_sext;
+        end else if (insn_slli) begin
+          rd_data_logic = rs1_data << imm_i_sext[4:0];
+        end else if (insn_srli) begin
+          rd_data_logic = rs1_data >> imm_i_sext[4:0];
+        end else if (insn_srai) begin
+          rd_data_logic = $signed(rs1_data) >>> imm_i_sext[4:0];
+        end else begin
+          illegal_insn = 1'b1;
+        end
+      end
+      OpRegReg: begin
+        we_logic = 1'b1;
+
+        if (insn_add) begin
+          a_logic = rs1_data;
+          b_logic = rs2_data;
+
+          rd_data_logic = sum;
+        end else if (insn_sub) begin
+          a_logic = rs1_data;
+          b_logic = ~rs2_data;
+          carry_in_logic = 1'b1;
+
+          rd_data_logic = sum;
+        end else if (insn_sll) begin
+          rd_data_logic = rs1_data << rs2_data[4:0];
+        end else if (insn_slt) begin
+          rd_data_logic = $signed(rs1_data) < $signed(rs2_data) ? 1 : 0;
+        end else if (insn_sltu) begin
+          rd_data_logic = rs1_data < rs2_data ? 1 : 0;
+        end else if (insn_xor) begin
+          rd_data_logic = rs1_data ^ rs2_data;
+        end else if (insn_srl) begin
+          rd_data_logic = rs1_data >> rs2_data[4:0];
+        end else if (insn_sra) begin
+          rd_data_logic = $signed(rs1_data) >>> rs2_data[4:0];
+        end else if (insn_or) begin
+          rd_data_logic = rs1_data | rs2_data;
+        end else if (insn_and) begin
+          rd_data_logic = rs1_data & rs2_data;
+        end else if (insn_mul) begin
+          multiplication_result = rs1_data * rs2_data;
+          rd_data_logic = multiplication_result[31:0];
+        end else if (insn_mulh) begin
+          multiplication_result = $signed(rs1_data) * $signed(rs2_data);
+          rd_data_logic = multiplication_result[63:32];
+        end else if (insn_mulhsu) begin
+          multiplication_result = $signed(rs1_data) * $signed({1'b0, rs2_data});
+          rd_data_logic = multiplication_result[63:32];
+        end else if (insn_mulhu) begin
+          multiplication_result = rs1_data * rs2_data;
+          rd_data_logic = multiplication_result[63:32];
+        end else if (insn_div) begin
+          if (div_cycles_current == 0) begin
+            i_dividend_logic = rs1_data[31] ? rs1_negated : rs1_data;
+            i_divisor_logic = rs2_data[31] ? rs2_negated : rs2_data;
+            we_logic = 1'b0;
+          end if (div_cycles_current + 1 == `N_DIVIDER_STAGES) begin
+            rd_data_logic = (rs1_data[31] ^ rs2_data[31]) ? quotient_negated : o_quotient;
+            rd_data_logic = (rs2_data == 32'b0) ? ~32'b0 : rd_data_logic;
+          end else begin
+            we_logic = 1'b0;
+          end
+        end else if (insn_divu) begin
+          if (div_cycles_current == 0) begin
+            i_dividend_logic = rs1_data;
+            i_divisor_logic = rs2_data;
+            we_logic = 1'b0;
+          end if (div_cycles_current + 1 == `N_DIVIDER_STAGES) begin
+            rd_data_logic = (rs2_data == 32'b0) ? ~32'b0 : o_quotient;
+          end else begin
+            we_logic = 1'b0;
+          end
+        end else if (insn_rem) begin
+          if (div_cycles_current == 0) begin
+            i_dividend_logic = rs1_data[31] ? rs1_negated : rs1_data;
+            i_divisor_logic = rs2_data[31] ? rs2_negated : rs2_data;
+            we_logic = 1'b0;
+          end if (div_cycles_current + 1 == `N_DIVIDER_STAGES) begin
+            rd_data_logic = rs1_data[31] ? remainder_negated : o_remainder;
+            rd_data_logic = (rs2_data == 32'b0) ? rs1_data : rd_data_logic;
+          end else begin
+            we_logic = 1'b0;
+          end
+        end else if (insn_remu) begin
+          if (div_cycles_current == 0) begin
+            i_dividend_logic = rs1_data;
+            i_divisor_logic = rs2_data;
+            we_logic = 1'b0;
+          end if (div_cycles_current + 1 == `N_DIVIDER_STAGES) begin
+            rd_data_logic = (rs2_data == 32'b0) ? rs1_data : o_remainder;
+          end else begin
+            we_logic = 1'b0;
+          end
+        end
+      end
+      OpEnviron: begin
+        halt = 1'b1;
+      end
+      // OpMiscMem: begin
+
+      // end
+      default: begin
+        illegal_insn = 1'b1;
+      end
+    endcase
+  end
+
+  // no clue what this does lol
+  assign trace_completed_pc = pcCurrent;
+  assign trace_completed_insn = insn_from_imem;
+  assign trace_completed_cycle_status = (is_div_cycle && div_cycles_current < `N_DIVIDER_STAGES) ? CYCLE_DIV : CYCLE_NO_STALL;
 
 endmodule
 
