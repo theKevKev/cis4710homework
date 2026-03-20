@@ -62,8 +62,10 @@ module RegFile (
   logic [`REG_SIZE] regs[NumRegs];
 
   assign regs[0]  = 32'd0;  // x0 is always zero
-  assign rs1_data = regs[rs1];  // 1st read port
-  assign rs2_data = regs[rs2];  // 2nd read port
+
+  // WD Bypass
+  assign rs1_data = (we && (rd == rs1) && (rs1 != 5'd0)) ? rd_data : regs[rs1];  // 1st read port
+  assign rs2_data = (we && (rd == rs2) && (rs2 != 5'd0)) ? rd_data : regs[rs2];  // 2nd read port
 
   genvar i;
   for (i = 1; i < 32; i = i + 1) begin
@@ -223,12 +225,7 @@ module DatapathPipelined (
   );
 
   // Load-Use Stall
-  wire load_use_stall = (execute_state.insn[6:0] == OpLoad && execute_state.insn[11:7] != 5'b0) && 
-                        ( (decode_state.insn[19:15] == execute_state.insn[11:7]) || 
-                          ( (decode_state.insn[24:20] == execute_state.insn[11:7]) && 
-                            (decode_state.insn[6:0] != OpStore) ) )
-
-
+  wire load_use_stall = (execute_state.insn[6:0] == OpLoad && execute_state.insn[11:7] != 5'b0) && ((decode_state.insn[19:15] == execute_state.insn[11:7]) || ( (decode_state.insn[24:20] == execute_state.insn[11:7]) && (decode_state.insn[6:0] != OpStore) ) );
 
   // Register File //
   wire we;
@@ -384,18 +381,18 @@ module DatapathPipelined (
 
   wire [`REG_SIZE] x_rs1_negated;
   CarryLookaheadAdder negator_rs1 (
-      .a  (~execute_state.rs1_data),  // Invert bits
-      .b  (32'b0),                    // Add 0
-      .cin(1'b1),                     // Add 1 (via carry-in)
-      .sum(x_rs1_negated)             // Result is -rs1
+      .a  (~x_rs1_data),   // Invert bits
+      .b  (32'b0),         // Add 0
+      .cin(1'b1),          // Add 1 (via carry-in)
+      .sum(x_rs1_negated)  // Result is -rs1
   );
 
   wire [`REG_SIZE] x_rs2_negated;
   CarryLookaheadAdder negator_rs2 (
-      .a  (~execute_state.rs2_data),  // Invert bits
-      .b  (32'b0),                    // Add 0
-      .cin(1'b1),                     // Add 1 (via carry-in)
-      .sum(x_rs2_negated)             // Result is -rs1
+      .a  (~x_rs2_data),   // Invert bits
+      .b  (32'b0),         // Add 0
+      .cin(1'b1),          // Add 1 (via carry-in)
+      .sum(x_rs2_negated)  // Result is -rs1
   );
 
   wire [`REG_SIZE] quotient_negated;
@@ -446,11 +443,47 @@ module DatapathPipelined (
   assign i_divisor = i_divisor_logic;
 
   // Added bypass logic: 
-  
+  wire [6:0] m_opcode_bypass = memory_state.insn[6:0];
+  wire M_bypass = (memory_state.insn[11:7] != 5'b0) && 
+                   (m_opcode_bypass == OpLui || m_opcode_bypass == OpAuipc || 
+                    m_opcode_bypass == OpJal || m_opcode_bypass == OpJalr || 
+                    m_opcode_bypass == OpRegReg || m_opcode_bypass == OpRegImm || 
+                    m_opcode_bypass == OpLoad); // check if it's a use instruction
+
+  wire [6:0] w_opcode_bypass = writeback_state.insn[6:0];
+  wire W_bypass = (writeback_state.insn[11:7] != 5'b0) && 
+                   (w_opcode_bypass == OpLui || w_opcode_bypass == OpAuipc || 
+                    w_opcode_bypass == OpJal || w_opcode_bypass == OpJalr || 
+                    w_opcode_bypass == OpRegReg || w_opcode_bypass == OpRegImm || 
+                    w_opcode_bypass == OpLoad); // check if it's a use instruction
+  wire [`REG_SIZE] w_bypassed_data = (w_opcode_bypass == OpLoad) ? writeback_state.load_data : writeback_state.alu_result;
+
+  wire [4:0] x_rs1 = execute_state.insn[19:15];
+  wire [4:0] x_rs2 = execute_state.insn[24:20];
+
+  logic [`REG_SIZE] x_rs1_data;
+  logic [`REG_SIZE] x_rs2_data;
+
+  always_comb begin
+    x_rs1_data = execute_state.rs1_data;
+    x_rs2_data = execute_state.rs2_data;
+
+    // MX Bypass takes priority over WX Bypass
+    if (M_bypass && memory_state.insn[11:7] == x_rs1) begin
+      x_rs1_data = memory_state.alu_result;
+    end else if (W_bypass && writeback_state.insn[11:7] == x_rs1) begin
+      x_rs1_data = w_bypassed_data;
+    end
+
+    if (M_bypass && memory_state.insn[11:7] == x_rs2) begin
+      x_rs2_data = memory_state.alu_result;
+    end else if (W_bypass && writeback_state.insn[11:7] == x_rs2) begin
+      x_rs2_data = w_bypassed_data;
+    end
+  end
 
   always_comb begin
     illegal_insn = 1'b0;
-    halt = 1'b0;
 
     alu_result_logic = 32'b0;
     a_logic = 32'b0;
@@ -479,32 +512,32 @@ module DatapathPipelined (
       OpJalr: begin
         alu_result_logic  = execute_state.pc + 4;
         branch_successful = 1'b1;
-        x_branch_target   = (execute_state.rs1_data + x_imm_i_sext) & ~32'b1;
+        x_branch_target   = (x_rs1_data + x_imm_i_sext) & ~32'b1;
       end
       OpBranch: begin
         x_branch_target = execute_state.pc + x_imm_b_sext;
         if (insn_beq) begin
-          if (execute_state.rs1_data == execute_state.rs2_data) begin
+          if (x_rs1_data == x_rs2_data) begin
             branch_successful = 1'b1;
           end
         end else if (insn_bne) begin
-          if (execute_state.rs1_data != execute_state.rs2_data) begin
+          if (x_rs1_data != x_rs2_data) begin
             branch_successful = 1'b1;
           end
         end else if (insn_blt) begin
-          if ($signed(execute_state.rs1_data) < $signed(execute_state.rs2_data)) begin
+          if ($signed(x_rs1_data) < $signed(x_rs2_data)) begin
             branch_successful = 1'b1;
           end
         end else if (insn_bge) begin
-          if ($signed(execute_state.rs1_data) >= $signed(execute_state.rs2_data)) begin
+          if ($signed(x_rs1_data) >= $signed(x_rs2_data)) begin
             branch_successful = 1'b1;
           end
         end else if (insn_bltu) begin
-          if (execute_state.rs1_data < execute_state.rs2_data) begin
+          if (x_rs1_data < x_rs2_data) begin
             branch_successful = 1'b1;
           end
         end else if (insn_bgeu) begin
-          if (execute_state.rs1_data >= execute_state.rs2_data) begin
+          if (x_rs1_data >= x_rs2_data) begin
             branch_successful = 1'b1;
           end
         end else begin
@@ -512,66 +545,65 @@ module DatapathPipelined (
         end
       end
       OpLoad: begin
-        alu_result_logic = (execute_state.rs1_data + x_imm_i_sext);
+        alu_result_logic = (x_rs1_data + x_imm_i_sext);
       end
       OpStore: begin
-        alu_result_logic = (execute_state.rs1_data + x_imm_s_sext);
+        alu_result_logic = (x_rs1_data + x_imm_s_sext);
       end
       OpRegImm: begin
         if (insn_addi) begin
-          a_logic = execute_state.rs1_data;
+          a_logic = x_rs1_data;
           b_logic = x_imm_i_sext;
 
           alu_result_logic = sum;
         end else if (insn_slti) begin
-          alu_result_logic = $signed(execute_state.rs1_data) < $signed(x_imm_i_sext) ? 1 : 0;
+          alu_result_logic = $signed(x_rs1_data) < $signed(x_imm_i_sext) ? 1 : 0;
         end else if (insn_sltiu) begin
-          alu_result_logic = execute_state.rs1_data < x_imm_i_sext ? 1 : 0;
+          alu_result_logic = x_rs1_data < x_imm_i_sext ? 1 : 0;
         end else if (insn_xori) begin
-          alu_result_logic = execute_state.rs1_data ^ x_imm_i_sext;
+          alu_result_logic = x_rs1_data ^ x_imm_i_sext;
         end else if (insn_ori) begin
-          alu_result_logic = execute_state.rs1_data | x_imm_i_sext;
+          alu_result_logic = x_rs1_data | x_imm_i_sext;
         end else if (insn_andi) begin
-          alu_result_logic = execute_state.rs1_data & x_imm_i_sext;
+          alu_result_logic = x_rs1_data & x_imm_i_sext;
         end else if (insn_slli) begin
-          alu_result_logic = execute_state.rs1_data << x_imm_i_sext[4:0];
+          alu_result_logic = x_rs1_data << x_imm_i_sext[4:0];
         end else if (insn_srli) begin
-          alu_result_logic = execute_state.rs1_data >> x_imm_i_sext[4:0];
+          alu_result_logic = x_rs1_data >> x_imm_i_sext[4:0];
         end else if (insn_srai) begin
-          alu_result_logic = $signed(execute_state.rs1_data) >>> x_imm_i_sext[4:0];
+          alu_result_logic = $signed(x_rs1_data) >>> x_imm_i_sext[4:0];
         end else begin
           illegal_insn = 1'b1;
         end
       end
       OpRegReg: begin
         if (insn_add) begin
-          a_logic = execute_state.rs1_data;
-          b_logic = execute_state.rs2_data;
+          a_logic = x_rs1_data;
+          b_logic = x_rs2_data;
 
           alu_result_logic = sum;
         end else if (insn_sub) begin
-          a_logic = execute_state.rs1_data;
-          b_logic = ~execute_state.rs2_data;
+          a_logic = x_rs1_data;
+          b_logic = ~x_rs2_data;
           carry_in_logic = 1'b1;
 
           alu_result_logic = sum;
         end else if (insn_sll) begin
-          alu_result_logic = execute_state.rs1_data << execute_state.rs2_data[4:0];
+          alu_result_logic = x_rs1_data << x_rs2_data[4:0];
         end else if (insn_slt) begin
-          alu_result_logic = $signed(execute_state.rs1_data) < $signed(execute_state.rs2_data) ? 1 :
-              0;
+          alu_result_logic = $signed(x_rs1_data) < $signed(x_rs2_data) ? 1 : 0;
         end else if (insn_sltu) begin
-          alu_result_logic = execute_state.rs1_data < execute_state.rs2_data ? 1 : 0;
+          alu_result_logic = x_rs1_data < x_rs2_data ? 1 : 0;
         end else if (insn_xor) begin
-          alu_result_logic = execute_state.rs1_data ^ execute_state.rs2_data;
+          alu_result_logic = x_rs1_data ^ x_rs2_data;
         end else if (insn_srl) begin
-          alu_result_logic = execute_state.rs1_data >> execute_state.rs2_data[4:0];
+          alu_result_logic = x_rs1_data >> x_rs2_data[4:0];
         end else if (insn_sra) begin
-          alu_result_logic = $signed(execute_state.rs1_data) >>> execute_state.rs2_data[4:0];
+          alu_result_logic = $signed(x_rs1_data) >>> x_rs2_data[4:0];
         end else if (insn_or) begin
-          alu_result_logic = execute_state.rs1_data | execute_state.rs2_data;
+          alu_result_logic = x_rs1_data | x_rs2_data;
         end else if (insn_and) begin
-          alu_result_logic = execute_state.rs1_data & execute_state.rs2_data;
+          alu_result_logic = x_rs1_data & x_rs2_data;
           // end else if (insn_mul) begin
           //   multiplication_result = rs1_data * rs2_data;
           //   alu_result_logic = multiplication_result[31:0];
@@ -628,9 +660,6 @@ module DatapathPipelined (
           //   end
         end
       end
-      OpEnviron: begin
-        halt = 1'b1;
-      end
       // OpMiscMem: begin
 
       // end
@@ -655,7 +684,7 @@ module DatapathPipelined (
           insn: execute_state.insn,
           cycle_status: execute_state.cycle_status,
           alu_result: alu_result_logic,
-          rs2_data: execute_state.rs2_data
+          rs2_data: x_rs2_data
       };
     end
   end
@@ -680,6 +709,17 @@ module DatapathPipelined (
   wire insn_sb = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b000;
   wire insn_sh = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b001;
   wire insn_sw = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b010;
+
+  // WM Bypassing 
+  wire [4:0] m_rs2 = memory_state.insn[24:20];
+  logic [`REG_SIZE] m_store_data;
+
+  always_comb begin
+    m_store_data = memory_state.rs2_data;
+    if (W_bypass && writeback_state.insn[11:7] == m_rs2) begin
+      m_store_data = w_bypassed_data;
+    end
+  end
 
   always_comb begin
     addr_to_dmem = 32'b0;
@@ -713,13 +753,13 @@ module DatapathPipelined (
         addr_to_dmem = memory_state.alu_result & ~32'b11;
         offset = memory_state.alu_result & 32'b11;
         if (insn_sb) begin
-          store_data_to_dmem[offset*8+:8] = memory_state.rs2_data[7:0];
+          store_data_to_dmem[offset*8+:8] = m_store_data[7:0];
           store_we_to_dmem = 4'b0001 << offset;
         end else if (insn_sh) begin
-          store_data_to_dmem[offset[1]*16+:16] = memory_state.rs2_data[15:0];
+          store_data_to_dmem[offset[1]*16+:16] = m_store_data[15:0];
           store_we_to_dmem = 4'b0011 << offset;
         end else if (insn_sw) begin
-          store_data_to_dmem = memory_state.rs2_data;
+          store_data_to_dmem = m_store_data;
           store_we_to_dmem   = 4'b1111;
         end else begin
           // illegal_insn = 1'b1;
@@ -772,6 +812,7 @@ module DatapathPipelined (
   always_comb begin
     we_logic = 1'b0;
     rd_data_logic = 32'b0;
+    halt = 1'b0;
 
     // can we just let the rf handle writing to register x0
     case (w_opcode)
@@ -783,6 +824,11 @@ module DatapathPipelined (
         we_logic = 1'b1;
         rd_data_logic = writeback_state.load_data;
       end
+      OpEnviron: begin
+        if (writeback_state.cycle_status == CYCLE_NO_STALL) begin
+          halt = 1'b1;
+        end
+      end
       default: begin
         // ignore other instructions
       end
@@ -792,8 +838,8 @@ module DatapathPipelined (
   assign we = we_logic;
   assign rd_data = rd_data_logic;
 
-  assign trace_completed_pc = writeback_state.pc;
-  assign trace_completed_insn = writeback_state.insn;
+  assign trace_completed_pc = (writeback_state.cycle_status == CYCLE_NO_STALL) ? writeback_state.pc : 32'b0;
+  assign trace_completed_insn = (writeback_state.cycle_status == CYCLE_NO_STALL) ? writeback_state.insn : 32'b0;
   assign trace_completed_cycle_status = writeback_state.cycle_status;
 
 endmodule

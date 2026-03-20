@@ -765,72 +765,7 @@ module MemorySingleCycle (
 	initial _sv2v_0 = 0;
 endmodule
 `default_nettype none
-module debouncer (
-	i_clk,
-	i_in,
-	o_debounced,
-	o_debug
-);
-	parameter NIN = 21;
-	parameter LGWAIT = 17;
-	input wire i_clk;
-	input wire [NIN - 1:0] i_in;
-	output reg [NIN - 1:0] o_debounced;
-	output wire [30:0] o_debug;
-	reg different;
-	reg ztimer;
-	reg [NIN - 1:0] r_in;
-	reg [NIN - 1:0] q_in;
-	reg [NIN - 1:0] r_last;
-	reg [LGWAIT - 1:0] timer;
-	initial q_in = 0;
-	initial r_in = 0;
-	initial different = 0;
-	always @(posedge i_clk) q_in <= i_in;
-	always @(posedge i_clk) r_in <= q_in;
-	always @(posedge i_clk) r_last <= r_in;
-	initial ztimer = 1'b1;
-	initial timer = 0;
-	always @(posedge i_clk)
-		if (ztimer && different) begin
-			timer <= {LGWAIT {1'b1}};
-			ztimer <= 1'b0;
-		end
-		else if (!ztimer) begin
-			timer <= timer - 1'b1;
-			ztimer <= timer[LGWAIT - 1:1] == 0;
-		end
-		else begin
-			ztimer <= 1'b1;
-			timer <= 0;
-		end
-	always @(posedge i_clk) different <= (different && !ztimer) || (r_in != o_debounced);
-	initial o_debounced = {NIN {1'b0}};
-	always @(posedge i_clk)
-		if (ztimer)
-			o_debounced <= r_last;
-	reg trigger;
-	initial trigger = 1'b0;
-	always @(posedge i_clk) trigger <= (((!ztimer && !different) && !(|i_in)) && (timer[LGWAIT - 1:2] == 0)) && timer[1];
-	wire [30:0] debug;
-	assign debug[30] = ztimer;
-	assign debug[29] = trigger;
-	assign debug[28] = 1'b0;
-	generate
-		if (NIN >= 14) begin : genblk1
-			assign debug[27:14] = o_debounced[13:0];
-			assign debug[13:0] = r_in[13:0];
-		end
-		else begin : genblk1
-			assign debug[27:14 + NIN] = 0;
-			assign debug[(14 + NIN) - 1:14] = o_debounced;
-			assign debug[13:NIN] = 0;
-			assign debug[NIN - 1:0] = r_in;
-		end
-	endgenerate
-	assign o_debug = debug;
-endmodule
-module SystemDemo (
+module SystemResourceCheck (
 	external_clk_25MHz,
 	btn,
 	led
@@ -838,17 +773,7 @@ module SystemDemo (
 	input wire external_clk_25MHz;
 	input wire [6:0] btn;
 	output wire [7:0] led;
-	localparam signed [31:0] MmapButtons = 32'hff001000;
-	localparam signed [31:0] MmapLeds = 32'hff002000;
-	wire rst_button_n;
-	wire [30:0] ignore;
 	wire clk_proc;
-	debouncer #(.NIN(1)) db(
-		.i_clk(clk_proc),
-		.i_in(btn[0]),
-		.o_debounced(rst_button_n),
-		.o_debug(ignore)
-	);
 	wire clk_mem;
 	wire clk_locked;
 	MyClockGen clock_gen(
@@ -857,40 +782,31 @@ module SystemDemo (
 		.clk_mem(clk_mem),
 		.locked(clk_locked)
 	);
-	wire rst = !rst_button_n || !clk_locked;
 	wire [31:0] pc_to_imem;
 	wire [31:0] insn_from_imem;
 	wire [31:0] mem_data_addr;
 	wire [31:0] mem_data_loaded_value;
 	wire [31:0] mem_data_to_write;
 	wire [3:0] mem_data_we;
-	reg [7:0] led_state;
-	assign led = led_state;
-	always @(posedge clk_mem)
-		if (rst)
-			led_state <= 0;
-		else if ((mem_data_addr == MmapLeds) && (mem_data_we[0] == 1))
-			led_state <= mem_data_to_write[7:0];
-	MemorySingleCycle #(.NUM_WORDS(1024)) memory(
-		.rst(rst),
+	MemorySingleCycle #(.NUM_WORDS(128)) memory(
+		.rst(!clk_locked),
 		.clock_mem(clk_mem),
 		.pc_to_imem(pc_to_imem),
 		.insn_from_imem(insn_from_imem),
 		.addr_to_dmem(mem_data_addr),
 		.load_data_from_dmem(mem_data_loaded_value),
 		.store_data_to_dmem(mem_data_to_write),
-		.store_we_to_dmem((mem_data_addr == MmapLeds ? 4'd0 : mem_data_we))
+		.store_we_to_dmem(mem_data_we)
 	);
-	wire halt;
 	DatapathSingleCycle datapath(
 		.clk(clk_proc),
-		.rst(rst),
+		.rst(!clk_locked),
 		.pc_to_imem(pc_to_imem),
 		.insn_from_imem(insn_from_imem),
 		.addr_to_dmem(mem_data_addr),
 		.store_data_to_dmem(mem_data_to_write),
 		.store_we_to_dmem(mem_data_we),
-		.load_data_from_dmem((mem_data_addr == MmapButtons ? {25'd0, btn} : mem_data_loaded_value)),
-		.halt(halt)
+		.load_data_from_dmem(mem_data_loaded_value),
+		.halt(led[0])
 	);
 endmodule
