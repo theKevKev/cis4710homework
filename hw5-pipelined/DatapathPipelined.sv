@@ -225,7 +225,9 @@ module DatapathPipelined (
   );
 
   // Load-Use Stall
-  wire load_use_stall = (execute_state.insn[6:0] == OpLoad && execute_state.insn[11:7] != 5'b0) && ((decode_state.insn[19:15] == execute_state.insn[11:7]) || ( (decode_state.insn[24:20] == execute_state.insn[11:7]) && (decode_state.insn[6:0] != OpStore) ) );
+  wire load_use_stall = (execute_state.insn[6:0] == OpLoad && execute_state.insn[11:7] != 5'b0) && (
+    (decode_state.insn[19:15] == execute_state.insn[11:7]) || 
+    ( (decode_state.insn[24:20] == execute_state.insn[11:7]) && (decode_state.insn[6:0] != OpStore) ) );
 
   // Register File //
   wire we;
@@ -300,7 +302,8 @@ module DatapathPipelined (
 
   // S - stores
   wire [11:0] x_imm_s;
-  assign x_imm_s[11:5] = x_insn_funct7;  // x_imm_s[4:0] = x_insn_rd; not needed in execute stage
+  assign x_imm_s[11:5] = x_insn_funct7,
+      x_imm_s[4:0] = execute_state.insn[11:7];  // not needed in execute stage
 
   // B - conditionals
   wire [12:0] x_imm_b;
