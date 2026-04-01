@@ -372,6 +372,19 @@ async def testWMAddress(dut):
 #     assertEquals(0xFFFF_F000, dut.datapath.rf.regs[1].value, f'failed at cycle {dut.datapath.cycles_current.value.integer}')
 #     pass
 
+# @cocotb.test(skip='RVTEST_ALUBR' in os.environ)
+# async def testKEVINGAURAVDIV(dut):
+#     "Run div insn"
+#     await preTestSetup(dut,'''
+#         lui x1,0x00014
+#         lui x2,0x00006
+#         sub x2,x0,x2
+#         div x3,x1,x2''')
+
+#     await ClockCycles(dut.clk, 9 + DIVIDER_STAGES)
+#     assertEquals(-3, dut.datapath.rf.regs[3].value, f'failed at cycle {dut.datapath.cycles_current.value.integer}')
+
+
 @cocotb.test(skip='RVTEST_ALUBR' in os.environ)
 async def testDiv(dut):
     "Run div insn"

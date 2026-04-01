@@ -415,9 +415,14 @@ module DatapathPipelined (
 	wire [31:0] f_insn;
 	reg [31:0] f_cycle_status;
 	reg branch_successful;
+	reg divide_stall_logic;
+	wire div_stall = divide_stall_logic;
 	reg [95:0] decode_state;
+	wire [6:0] d_insn_opcode = decode_state[38:32];
+	wire d_uses_rs1 = ((d_insn_opcode != OpLui) && (d_insn_opcode != OpAuipc)) && (d_insn_opcode != OpJal);
+	wire d_uses_rs2 = ((d_insn_opcode == OpStore) || (d_insn_opcode == OpBranch)) || (d_insn_opcode == OpRegReg);
 	reg [159:0] execute_state;
-	wire load_use_stall = ((execute_state[102:96] == OpLoad) && (execute_state[107:103] != 5'b00000)) && ((decode_state[51:47] == execute_state[107:103]) || ((decode_state[56:52] == execute_state[107:103]) && (decode_state[38:32] != OpStore)));
+	wire load_use_stall = ((execute_state[102:96] == OpLoad) && (execute_state[107:103] != 5'b00000)) && ((d_uses_rs1 && (decode_state[51:47] == execute_state[107:103])) || ((d_uses_rs2 && (decode_state[56:52] == execute_state[107:103])) && (decode_state[38:32] != OpStore)));
 	reg [31:0] x_branch_target;
 	always @(posedge clk)
 		if (rst) begin
@@ -428,7 +433,7 @@ module DatapathPipelined (
 			f_cycle_status <= 32'd1;
 			if (branch_successful)
 				f_pc_current <= x_branch_target;
-			else if (!load_use_stall)
+			else if (!load_use_stall && !div_stall)
 				f_pc_current <= f_pc_current + 4;
 		end
 	assign pc_to_imem = f_pc_current;
@@ -442,14 +447,40 @@ module DatapathPipelined (
 		if (rst)
 			decode_state <= 96'h000000000000000000000004;
 		else if (branch_successful)
-			decode_state <= 96'h000000000000001300000008;
-		else if (!load_use_stall)
+			decode_state <= 96'h000000000000000000000008;
+		else if (!load_use_stall && !div_stall)
 			decode_state <= {f_pc_current, f_insn, f_cycle_status};
 	wire [255:0] d_disasm;
 	Disasm #(.PREFIX("D")) disasm_1decode(
 		.insn(decode_state[63-:32]),
 		.disasm(d_disasm)
 	);
+	wire d_insn_div = ((d_insn_opcode == OpRegReg) && (decode_state[63:57] == 7'd1)) && (decode_state[46:44] == 3'b100);
+	wire d_insn_divu = ((d_insn_opcode == OpRegReg) && (decode_state[63:57] == 7'd1)) && (decode_state[46:44] == 3'b101);
+	wire d_insn_rem = ((d_insn_opcode == OpRegReg) && (decode_state[63:57] == 7'd1)) && (decode_state[46:44] == 3'b110);
+	wire d_insn_remu = ((d_insn_opcode == OpRegReg) && (decode_state[63:57] == 7'd1)) && (decode_state[46:44] == 3'b111);
+	wire d_is_div_cycle = ((d_insn_div || d_insn_divu) || d_insn_rem) || d_insn_remu;
+	reg divider_busy;
+	reg div_dependent;
+	reg [159:0] divide_state [0:7];
+	always @(*) begin
+		if (_sv2v_0)
+			;
+		divider_busy = 1'b0;
+		div_dependent = 1'b0;
+		begin : sv2v_autoblock_1
+			reg signed [31:0] i;
+			for (i = 0; i < 7; i = i + 1)
+				if (divide_state[i][127-:32] != 32'b00000000000000000000000000000000) begin
+					divider_busy = 1'b1;
+					div_dependent = (divide_state[i][107:103] == decode_state[51:47]) || (divide_state[i][107:103] == decode_state[56:52]);
+				end
+		end
+		if (d_is_div_cycle)
+			divide_stall_logic = div_dependent;
+		else
+			divide_stall_logic = divider_busy;
+	end
 	wire we;
 	reg [159:0] writeback_state;
 	wire [4:0] insn_rd = writeback_state[107:103];
@@ -476,8 +507,8 @@ module DatapathPipelined (
 	always @(posedge clk)
 		if (rst)
 			execute_state <= 160'h0000000000000000000000040000000000000000;
-		else if (branch_successful || load_use_stall)
-			execute_state <= {64'h0000000000000013, (branch_successful ? 32'd8 : 32'd16), 64'h0000000000000000};
+		else if ((branch_successful || load_use_stall) || div_stall)
+			execute_state <= {64'h0000000000000000, (branch_successful ? 32'd8 : (load_use_stall ? 32'd16 : 32'd2)), 64'h0000000000000000};
 		else
 			execute_state <= {sv2v_cast_32(decode_state[95-:32]), sv2v_cast_32(decode_state[63-:32]), sv2v_cast_32(decode_state[31-:32]), rs1_data, rs2_data};
 	wire [255:0] x_disasm;
@@ -485,9 +516,45 @@ module DatapathPipelined (
 		.insn(execute_state[127-:32]),
 		.disasm(x_disasm)
 	);
+	wire [6:0] x_insn_opcode;
+	wire insn_div = ((x_insn_opcode == OpRegReg) && (execute_state[127:121] == 7'd1)) && (execute_state[110:108] == 3'b100);
+	wire insn_divu = ((x_insn_opcode == OpRegReg) && (execute_state[127:121] == 7'd1)) && (execute_state[110:108] == 3'b101);
+	wire insn_rem = ((x_insn_opcode == OpRegReg) && (execute_state[127:121] == 7'd1)) && (execute_state[110:108] == 3'b110);
+	wire insn_remu = ((x_insn_opcode == OpRegReg) && (execute_state[127:121] == 7'd1)) && (execute_state[110:108] == 3'b111);
+	wire is_div_cycle = ((insn_div || insn_divu) || insn_rem) || insn_remu;
+	reg [31:0] x_rs1_data;
+	reg [31:0] x_rs2_data;
+	wire [160:1] sv2v_tmp_C2E42;
+	assign sv2v_tmp_C2E42 = {sv2v_cast_32((is_div_cycle ? execute_state[159-:32] : 0)), sv2v_cast_32((is_div_cycle ? execute_state[127-:32] : 32'b00000000000000000000000000000000)), sv2v_cast_32((is_div_cycle ? execute_state[95-:32] : 32'd0)), sv2v_cast_32((is_div_cycle ? x_rs1_data : 0)), sv2v_cast_32((is_div_cycle ? x_rs2_data : 0))};
+	always @(*) divide_state[0] = sv2v_tmp_C2E42;
+	always @(posedge clk)
+		if (rst) begin : sv2v_autoblock_2
+			reg signed [31:0] i;
+			for (i = 1; i < 8; i = i + 1)
+				divide_state[i] <= 160'h0000000000000000000000040000000000000000;
+		end
+		else begin : sv2v_autoblock_3
+			reg signed [31:0] i;
+			for (i = 1; i < 8; i = i + 1)
+				divide_state[i] <= {sv2v_cast_32(divide_state[i - 1][159-:32]), sv2v_cast_32(divide_state[i - 1][127-:32]), sv2v_cast_32(divide_state[i - 1][95-:32]), sv2v_cast_32(divide_state[i - 1][63-:32]), sv2v_cast_32(divide_state[i - 1][31-:32])};
+		end
+	wire [255:0] divide_disasm [7:0];
+	genvar _gv_i_4;
+	function automatic [7:0] sv2v_cast_8;
+		input reg [7:0] inp;
+		sv2v_cast_8 = inp;
+	endfunction
+	generate
+		for (_gv_i_4 = 0; _gv_i_4 < 8; _gv_i_4 = _gv_i_4 + 1) begin : gen_divide_disasm
+			localparam i = _gv_i_4;
+			Disasm #(.PREFIX(sv2v_cast_8("0" + i))) disasm_execute(
+				.insn(divide_state[i][127-:32]),
+				.disasm(divide_disasm[i])
+			);
+		end
+	endgenerate
 	wire [6:0] x_insn_funct7;
 	wire [2:0] x_insn_funct3;
-	wire [6:0] x_insn_opcode;
 	assign x_insn_funct7 = execute_state[127:121];
 	assign x_insn_funct3 = execute_state[110:108];
 	assign x_insn_opcode = execute_state[102:96];
@@ -496,6 +563,7 @@ module DatapathPipelined (
 	wire [4:0] x_imm_shamt = execute_state[120:116];
 	wire [11:0] x_imm_s;
 	assign x_imm_s[11:5] = x_insn_funct7;
+	assign x_imm_s[4:0] = execute_state[107:103];
 	wire [12:0] x_imm_b;
 	assign {x_imm_b[12], x_imm_b[10:5]} = x_insn_funct7;
 	assign {x_imm_b[4:1], x_imm_b[11]} = execute_state[107:103];
@@ -539,11 +607,13 @@ module DatapathPipelined (
 	wire insn_mulh = ((x_insn_opcode == OpRegReg) && (execute_state[127:121] == 7'd1)) && (execute_state[110:108] == 3'b001);
 	wire insn_mulhsu = ((x_insn_opcode == OpRegReg) && (execute_state[127:121] == 7'd1)) && (execute_state[110:108] == 3'b010);
 	wire insn_mulhu = ((x_insn_opcode == OpRegReg) && (execute_state[127:121] == 7'd1)) && (execute_state[110:108] == 3'b011);
-	wire insn_div = ((x_insn_opcode == OpRegReg) && (execute_state[127:121] == 7'd1)) && (execute_state[110:108] == 3'b100);
-	wire insn_divu = ((x_insn_opcode == OpRegReg) && (execute_state[127:121] == 7'd1)) && (execute_state[110:108] == 3'b101);
-	wire insn_rem = ((x_insn_opcode == OpRegReg) && (execute_state[127:121] == 7'd1)) && (execute_state[110:108] == 3'b110);
-	wire insn_remu = ((x_insn_opcode == OpRegReg) && (execute_state[127:121] == 7'd1)) && (execute_state[110:108] == 3'b111);
-	wire is_div_cycle = ((insn_div || insn_divu) || insn_rem) || insn_remu;
+	wire [6:0] d7_insn_opcode;
+	assign d7_insn_opcode = divide_state[7][102:96];
+	wire d7_insn_div = ((d7_insn_opcode == OpRegReg) && (divide_state[7][127:121] == 7'd1)) && (divide_state[7][110:108] == 3'b100);
+	wire d7_insn_divu = ((d7_insn_opcode == OpRegReg) && (divide_state[7][127:121] == 7'd1)) && (divide_state[7][110:108] == 3'b101);
+	wire d7_insn_rem = ((d7_insn_opcode == OpRegReg) && (divide_state[7][127:121] == 7'd1)) && (divide_state[7][110:108] == 3'b110);
+	wire d7_insn_remu = ((d7_insn_opcode == OpRegReg) && (divide_state[7][127:121] == 7'd1)) && (divide_state[7][110:108] == 3'b111);
+	wire d7_is_div_cycle = ((d7_insn_div || d7_insn_divu) || d7_insn_rem) || d7_insn_remu;
 	wire insn_ecall = (x_insn_opcode == OpEnviron) && (execute_state[127:103] == 25'd0);
 	wire insn_fence = x_insn_opcode == OpMiscMem;
 	wire [31:0] a;
@@ -557,7 +627,6 @@ module DatapathPipelined (
 		.sum(sum)
 	);
 	wire [31:0] x_rs1_negated;
-	reg [31:0] x_rs1_data;
 	CarryLookaheadAdder negator_rs1(
 		.a(~x_rs1_data),
 		.b(32'b00000000000000000000000000000000),
@@ -565,7 +634,6 @@ module DatapathPipelined (
 		.sum(x_rs1_negated)
 	);
 	wire [31:0] x_rs2_negated;
-	reg [31:0] x_rs2_data;
 	CarryLookaheadAdder negator_rs2(
 		.a(~x_rs2_data),
 		.b(32'b00000000000000000000000000000000),
@@ -743,14 +811,64 @@ module DatapathPipelined (
 					alu_result_logic = x_rs1_data | x_rs2_data;
 				else if (insn_and)
 					alu_result_logic = x_rs1_data & x_rs2_data;
-			default: illegal_insn = 1'b1;
+				else if (insn_mul) begin
+					multiplication_result = x_rs1_data * x_rs2_data;
+					alu_result_logic = multiplication_result[31:0];
+				end
+				else if (insn_mulh) begin
+					multiplication_result = $signed(x_rs1_data) * $signed(x_rs2_data);
+					alu_result_logic = multiplication_result[63:32];
+				end
+				else if (insn_mulhsu) begin
+					multiplication_result = $signed(x_rs1_data) * $signed({1'b0, x_rs2_data});
+					alu_result_logic = multiplication_result[63:32];
+				end
+				else if (insn_mulhu) begin
+					multiplication_result = x_rs1_data * x_rs2_data;
+					alu_result_logic = multiplication_result[63:32];
+				end
+				else if (insn_div) begin
+					i_dividend_logic = (x_rs1_data[31] ? x_rs1_negated : x_rs1_data);
+					i_divisor_logic = (x_rs2_data[31] ? x_rs2_negated : x_rs2_data);
+				end
+				else if (insn_divu) begin
+					i_dividend_logic = x_rs1_data;
+					i_divisor_logic = x_rs2_data;
+				end
+				else if (insn_rem) begin
+					i_dividend_logic = (x_rs1_data[31] ? x_rs1_negated : x_rs1_data);
+					i_divisor_logic = (x_rs2_data[31] ? x_rs2_negated : x_rs2_data);
+				end
+				else if (insn_remu) begin
+					i_dividend_logic = x_rs1_data;
+					i_divisor_logic = x_rs2_data;
+				end
+			default:
+				if (!d7_is_div_cycle)
+					illegal_insn = 1'b1;
 		endcase
+		if (d7_insn_div) begin
+			alu_result_logic = (divide_state[7][63] ^ divide_state[7][31] ? quotient_negated : o_quotient);
+			alu_result_logic = (divide_state[7][31-:32] == 32'b00000000000000000000000000000000 ? ~32'b00000000000000000000000000000000 : alu_result_logic);
+		end
+		else if (d7_insn_divu)
+			alu_result_logic = (divide_state[7][31-:32] == 32'b00000000000000000000000000000000 ? ~32'b00000000000000000000000000000000 : o_quotient);
+		else if (d7_insn_rem) begin
+			alu_result_logic = (divide_state[7][63] ? remainder_negated : o_remainder);
+			alu_result_logic = (divide_state[7][31-:32] == 32'b00000000000000000000000000000000 ? divide_state[7][63-:32] : alu_result_logic);
+		end
+		else if (d7_insn_remu)
+			alu_result_logic = (divide_state[7][31-:32] == 32'b00000000000000000000000000000000 ? divide_state[7][63-:32] : o_remainder);
 	end
 	always @(posedge clk)
 		if (rst)
 			memory_state <= 160'h0000000000000000000000040000000000000000;
-		else
+		else if (divide_state[7][127-:32] != 32'b00000000000000000000000000000000)
+			memory_state <= {sv2v_cast_32(divide_state[7][159-:32]), sv2v_cast_32(divide_state[7][127-:32]), sv2v_cast_32(divide_state[7][95-:32]), alu_result_logic, sv2v_cast_32(divide_state[7][31-:32])};
+		else if (!is_div_cycle)
 			memory_state <= {sv2v_cast_32(execute_state[159-:32]), sv2v_cast_32(execute_state[127-:32]), sv2v_cast_32(execute_state[95-:32]), alu_result_logic, x_rs2_data};
+		else
+			memory_state <= 160'h0000000000000000000000020000000000000000;
 	wire [255:0] m_disasm;
 	Disasm #(.PREFIX("M")) disasm_3memory(
 		.insn(memory_state[127-:32]),
@@ -857,8 +975,8 @@ module DatapathPipelined (
 	end
 	assign we = we_logic;
 	assign rd_data = rd_data_logic;
-	assign trace_completed_pc = (writeback_state[95-:32] == 32'd1 ? writeback_state[159-:32] : 32'b00000000000000000000000000000000);
-	assign trace_completed_insn = (writeback_state[95-:32] == 32'd1 ? writeback_state[127-:32] : 32'b00000000000000000000000000000000);
+	assign trace_completed_pc = writeback_state[159-:32];
+	assign trace_completed_insn = writeback_state[127-:32];
 	assign trace_completed_cycle_status = writeback_state[95-:32];
 	initial _sv2v_0 = 0;
 endmodule
