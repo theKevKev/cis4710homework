@@ -1,9 +1,12 @@
 {
-    "image": "cis5710/hw-base-arm:latest",
-
-    "customizations": {
+  "image": "cis5710/hw-base-gradescope:v2",
+  "customizations": {
     "vscode": {
-        "extensions": ["mshr-h.veriloghdl", "lramseyer.vaporview", "ms-python.python"]
+      "extensions": [
+        "mshr-h.veriloghdl",
+        "lramseyer.vaporview",
+        "ms-python.python"
+      ]
     }
   }
 }
