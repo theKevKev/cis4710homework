@@ -24,6 +24,9 @@
 `include "../hw4-multicycle/DividerUnsignedPipelined.sv"
 `include "EasyAxilMemory.sv"
 
+`define NOP_INSN 32'b0 
+
+
 module Disasm #(
     PREFIX = "D"
 ) (
@@ -150,8 +153,8 @@ module DatapathPipelinedAxil (
     output cycle_status_e trace_completed_cycle_status
 );
 
-  localparam bit True = 1'b1;
-  localparam bit False = 1'b0;
+  // localparam bit True = 1'b1;
+  // localparam bit False = 1'b0;
 
   // cycle counter
   logic [`REG_SIZE] cycles_current;
@@ -185,37 +188,88 @@ module DatapathPipelinedAxil (
   /***************/
 
   logic [`REG_SIZE] f_pc_current;
-  wire [`REG_SIZE] f_insn;
-  cycle_status_e f_cycle_status;
 
   // program counter
   always_ff @(posedge clk) begin
     if (rst) begin
-      f_pc_current   <= 32'd0;
-      // NB: use CYCLE_NO_STALL since this is the value that will persist after the last reset cycle
-      f_cycle_status <= CYCLE_NO_STALL;
-    end else begin
-      f_cycle_status <= CYCLE_NO_STALL;
-      if (branch_successful) begin
-        f_pc_current <= x_branch_target;
-      end else if (!load_use_stall && !div_stall) begin
-        // end else if (!load_use_stall) begin
-        f_pc_current <= f_pc_current + 4;
-      end
+      f_pc_current <= 32'd0;
+    end else if (branch_successful) begin
+      f_pc_current <= x_branch_target;
+    end else if (imem.ARVALID && imem.ARREADY) begin
+      f_pc_current <= f_pc_current + 4;
     end
   end
-  // send PC to imem
-  assign pc_to_imem = f_pc_current;
-  assign f_insn = insn_from_imem;
 
-  // Here's how to disassemble an insn into a string you can view in GtkWave.
-  // Use PREFIX to provide a 1-character tag to identify which stage the insn comes from.
+  cycle_status_e f_cycle_status = CYCLE_NO_STALL;
+  wire fetch_stall = !(imem.ARVALID && imem.ARREADY);
+
+  // send PC to imem
+  assign imem.ARADDR  = f_pc_current;
+  assign imem.ARVALID = !load_use_stall && !div_stall && !get_stall;
+
+  // because f_insn does not exist, this cannot exist either:
+
   wire [255:0] f_disasm;
   Disasm #(
       .PREFIX("F")
   ) disasm_0fetch (
-      .insn  (f_insn),
+      .insn  (imem.RDATA),
       .disasm(f_disasm)
+  );
+
+  /*************/
+  /* GET STAGE */
+  /*************/
+
+  logic [`REG_SIZE] g_pc_current;
+  cycle_status_e g_cycle_status;
+  logic g_has_instruction;
+
+  // program counter
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      g_pc_current <= 32'd0;
+      g_cycle_status <= CYCLE_RESET;
+      g_has_instruction <= 0;
+    end else if (branch_successful) begin
+      g_pc_current <= 0;
+      g_cycle_status <= CYCLE_TAKEN_BRANCH;
+      g_has_instruction <= 0;
+    end else begin
+      if (!fetch_stall) begin  // query happened, so i know g_stage is leaving
+        g_pc_current   <= f_pc_current;
+        g_cycle_status <= f_cycle_status;
+      end
+
+      if (!fetch_stall && (imem.RVALID && imem.RREADY)) begin
+        g_has_instruction <= 1;
+      end else if (fetch_stall && (imem.RVALID && imem.RREADY)) begin
+        g_has_instruction <= 0;
+      end else if (fetch_stall && !(imem.RVALID && imem.RREADY)) begin
+        g_has_instruction <= g_has_instruction;  // NOP
+      end
+    end
+  end
+
+  wire get_stall = g_has_instruction && !(imem.RVALID && imem.RREADY);
+
+
+  logic [`REG_SIZE] g_insn;
+  assign g_insn = fetch_stall ? 0 : imem.RDATA;
+  assign imem.RREADY = !load_use_stall && !div_stall || branch_successful;
+
+  // get insn from imem
+
+
+
+  // Here's how to disassemble an insn into a string you can view in GtkWave.
+  // Use PREFIX to provide a 1-character tag to identify which stage the insn comes from.
+  wire [255:0] g_disasm;
+  Disasm #(
+      .PREFIX("G")
+  ) disasm_0Xget (
+      .insn  (g_insn),
+      .disasm(g_disasm)
   );
 
   /****************/
@@ -229,9 +283,10 @@ module DatapathPipelinedAxil (
       decode_state <= '{pc: 0, insn: 0, cycle_status: CYCLE_RESET};
     end else if (branch_successful) begin
       decode_state <= '{pc: 0, insn: `NOP_INSN, cycle_status: CYCLE_TAKEN_BRANCH};
-    end else if (!load_use_stall && !div_stall) begin
-      // end else if (!load_use_stall) begin
-      decode_state <= '{pc: f_pc_current, insn: f_insn, cycle_status: f_cycle_status};
+    end else if (get_stall) begin
+      decode_state <= '{pc: 0, insn: `NOP_INSN, cycle_status: CYCLE_IMEM_WAIT};
+    end else if (!load_use_stall && !div_stall && g_has_instruction) begin
+      decode_state <= '{pc: g_pc_current, insn: g_insn, cycle_status: g_cycle_status};
     end
   end
   wire [255:0] d_disasm;
@@ -331,6 +386,8 @@ module DatapathPipelinedAxil (
           rs1_data: 0,
           rs2_data: 0
       };
+      // end else if (!dmem.RVALID && execute_state.insn[`OPCODE_SIZE] == OpLoad && (execute_state.insn != `NOP_INSN && execute_state.cycle_status != CYCLE_LOAD2USE)) begin
+      //   // NOP
     end else begin
       execute_state <= '{
           pc: decode_state.pc,
@@ -558,11 +615,28 @@ module DatapathPipelinedAxil (
   logic branch_successful;
   logic [`REG_SIZE] x_branch_target;
 
+  logic [`REG_SIZE] araddr_logic;
+  logic arvalid_logic;
+  logic [`REG_SIZE] awaddr_logic;
+  logic awvalid_logic;
+  logic [`REG_SIZE] wdata_logic;
+  logic [3:0] wstrb_logic;
+  logic wvalid_logic;
+  logic [`REG_SIZE] x_offset;
+
   assign a = a_logic;
   assign b = b_logic;
   assign carry_in = carry_in_logic;
   assign i_dividend = i_dividend_logic;
   assign i_divisor = i_divisor_logic;
+
+  assign dmem.ARADDR = araddr_logic;
+  assign dmem.ARVALID = arvalid_logic;
+  assign dmem.AWADDR = awaddr_logic;
+  assign dmem.AWVALID = awvalid_logic;
+  assign dmem.WDATA = wdata_logic;
+  assign dmem.WSTRB = wstrb_logic;
+  assign dmem.WVALID = wvalid_logic;
 
   // Added bypass logic: 
   wire [6:0] m_opcode_bypass = memory_state.insn[6:0];
@@ -619,6 +693,15 @@ module DatapathPipelinedAxil (
     i_dividend_logic = 32'b0;
     i_divisor_logic = 32'b0;
 
+    araddr_logic = 32'b0;
+    arvalid_logic = 1'b0;
+    awaddr_logic = 32'b0;
+    awvalid_logic = 1'b0;
+    wdata_logic = 32'b0;
+    wstrb_logic = 4'b0;
+    wvalid_logic = 1'b0;
+    x_offset = 32'b0;
+
     case (x_insn_opcode)
       OpLui: begin
         alu_result_logic = {execute_state.insn[31:12], 12'b0};
@@ -667,10 +750,31 @@ module DatapathPipelinedAxil (
         end
       end
       OpLoad: begin
-        alu_result_logic = (x_rs1_data + x_imm_i_sext);
+        alu_result_logic = x_rs1_data + x_imm_i_sext;
+
+        araddr_logic = alu_result_logic & ~32'b11;
+        arvalid_logic = 1'b1;
       end
       OpStore: begin
-        alu_result_logic = (x_rs1_data + x_imm_s_sext);
+        alu_result_logic = x_rs1_data + x_imm_s_sext;
+
+        awaddr_logic = alu_result_logic & ~32'b11;
+        awvalid_logic = 1'b1;
+        wvalid_logic = 1'b1;
+
+        x_offset = alu_result_logic & 32'b11;
+        if (insn_sb) begin
+          wdata_logic[x_offset*8+:8] = x_rs2_data[7:0];
+          wstrb_logic = 4'b0001 << x_offset;
+        end else if (insn_sh) begin
+          wdata_logic[x_offset[1]*16+:16] = x_rs2_data[15:0];
+          wstrb_logic = 4'b0011 << x_offset;
+        end else if (insn_sw) begin
+          wdata_logic = x_rs2_data;
+          wstrb_logic = 4'b1111;
+        end else begin
+          // illegal_insn = 1'b1;
+        end
       end
       OpRegImm: begin
         if (insn_addi) begin
@@ -794,6 +898,8 @@ module DatapathPipelinedAxil (
           alu_result: alu_result_logic,
           rs2_data: divide_state[7].rs2_data
       };
+      // end else if (!dmem.RVALID && execute_state.insn[`OPCODE_SIZE] == OpLoad) begin
+      //   // NOP
     end else if (!is_div_cycle) begin
       memory_state <= '{
           pc: execute_state.pc,
@@ -821,8 +927,10 @@ module DatapathPipelinedAxil (
   );
 
   wire [`OPCODE_SIZE] m_insn_opcode = memory_state.insn[6:0];
-  logic [`REG_SIZE] offset;
+  logic [`REG_SIZE] m_offset;
   logic [`REG_SIZE] m_load_data;
+  logic dmem_rready_logic;
+  logic dmem_bready_logic;
 
   wire insn_lb = m_insn_opcode == OpLoad && memory_state.insn[14:12] == 3'b000;
   wire insn_lh = m_insn_opcode == OpLoad && memory_state.insn[14:12] == 3'b001;
@@ -834,66 +942,47 @@ module DatapathPipelinedAxil (
   wire insn_sh = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b001;
   wire insn_sw = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b010;
 
-  // WM Bypassing 
   wire [4:0] m_rs2 = memory_state.insn[24:20];
-  logic [`REG_SIZE] m_store_data;
 
   always_comb begin
-    m_store_data = memory_state.rs2_data;
-    if (W_bypass && writeback_state.insn[11:7] == m_rs2) begin
-      m_store_data = w_bypassed_data;
-    end
-  end
+    // addr_to_dmem = 32'b0;
+    // store_data_to_dmem = 32'b0;
+    // store_we_to_dmem = 4'b0;
 
-  always_comb begin
-    addr_to_dmem = 32'b0;
-    store_data_to_dmem = 32'b0;
-    store_we_to_dmem = 4'b0;
-
-    offset = 32'b0;
+    m_offset = 32'b0;
     m_load_data = 32'b0;
+    dmem_rready_logic = 1'b0;
+    dmem_bready_logic = 1'b0;
 
     case (m_insn_opcode)
       OpLoad: begin
-        addr_to_dmem = memory_state.alu_result & ~32'b11;
-        offset = memory_state.alu_result & 32'b11;
+        dmem_rready_logic = 1'b1;
+        m_offset = memory_state.alu_result & 32'b11;
         if (insn_lb) begin
-          m_load_data = {{24{load_data_from_dmem[(offset*8)+7]}}, load_data_from_dmem[offset*8+:8]};
+          m_load_data = {{24{dmem.RDATA[(m_offset*8)+7]}}, dmem.RDATA[m_offset*8+:8]};
         end else if (insn_lh) begin
-          m_load_data = {
-            {16{load_data_from_dmem[(offset[1]*16)+15]}}, load_data_from_dmem[offset[1]*16+:16]
-          };
+          m_load_data = {{16{dmem.RDATA[(m_offset[1]*16)+15]}}, dmem.RDATA[m_offset[1]*16+:16]};
         end else if (insn_lw) begin
-          m_load_data = load_data_from_dmem[31:0];
+          m_load_data = dmem.RDATA[31:0];
         end else if (insn_lbu) begin
-          m_load_data = {24'b0, load_data_from_dmem[offset*8+:8]};
+          m_load_data = {24'b0, dmem.RDATA[m_offset*8+:8]};
         end else if (insn_lhu) begin
-          m_load_data = {16'b0, load_data_from_dmem[offset[1]*16+:16]};
+          m_load_data = {16'b0, dmem.RDATA[m_offset[1]*16+:16]};
         end else begin
           // illegal_insn = 1'b1;
         end
       end
       OpStore: begin
-        addr_to_dmem = memory_state.alu_result & ~32'b11;
-        offset = memory_state.alu_result & 32'b11;
-        if (insn_sb) begin
-          store_data_to_dmem[offset*8+:8] = m_store_data[7:0];
-          store_we_to_dmem = 4'b0001 << offset;
-        end else if (insn_sh) begin
-          store_data_to_dmem[offset[1]*16+:16] = m_store_data[15:0];
-          store_we_to_dmem = 4'b0011 << offset;
-        end else if (insn_sw) begin
-          store_data_to_dmem = m_store_data;
-          store_we_to_dmem   = 4'b1111;
-        end else begin
-          // illegal_insn = 1'b1;
-        end
+        dmem_bready_logic = 1'b1;
       end
       default: begin
         // ignore
       end
     endcase
   end
+
+  assign dmem.RREADY = dmem_rready_logic;
+  assign dmem.BREADY = dmem_bready_logic;
 
   /*******************/
   /* WRITEBACK STAGE */
@@ -910,6 +999,8 @@ module DatapathPipelinedAxil (
           alu_result: 0,
           load_data: 0
       };
+      // end else if (!dmem.RVALID) begin
+
     end else begin
       writeback_state <= '{
           pc: memory_state.pc,
