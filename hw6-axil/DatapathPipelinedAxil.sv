@@ -221,20 +221,55 @@ module DatapathPipelinedAxil (
   /* GET STAGE */
   /*************/
 
+  // logic [`REG_SIZE] g_pc_current;
+  // cycle_status_e g_cycle_status;
+  // logic g_has_instruction;
+
+  // // program counter
+  // always_ff @(posedge clk) begin
+  //   if (rst) begin
+  //     g_pc_current <= 32'd0;
+  //     g_cycle_status <= CYCLE_RESET;
+  //     g_has_instruction <= 0;
+  //   end else if (branch_successful) begin
+  //     g_pc_current <= 0;
+  //     g_cycle_status <= CYCLE_TAKEN_BRANCH;
+  //     g_has_instruction <= 0;
+  //   end else begin
+  //     if (!fetch_stall) begin  // query happened, so i know g_stage is leaving
+  //       g_pc_current   <= f_pc_current;
+  //       g_cycle_status <= f_cycle_status;
+  //     end
+
+  //     if (!fetch_stall && (imem.RVALID && imem.RREADY)) begin
+  //       g_has_instruction <= 1;
+  //     end else if (fetch_stall && (imem.RVALID && imem.RREADY)) begin
+  //       g_has_instruction <= 0;
+  //     end else if (fetch_stall && !(imem.RVALID && imem.RREADY)) begin
+  //       g_has_instruction <= g_has_instruction;  // NOP
+  //     end
+  //   end
+  // end
+
+  // wire get_stall = g_has_instruction && !(imem.RVALID && imem.RREADY);
+
   logic [`REG_SIZE] g_pc_current;
   cycle_status_e g_cycle_status;
-  logic g_has_instruction;
+  logic g_has_instruction_prev;
+  logic branch_successful_prev;
 
   // program counter
   always_ff @(posedge clk) begin
+    branch_successful_prev <= 0;
     if (rst) begin
       g_pc_current <= 32'd0;
       g_cycle_status <= CYCLE_RESET;
-      g_has_instruction <= 0;
+      g_has_instruction_prev <= 0;
     end else if (branch_successful) begin
       g_pc_current <= 0;
       g_cycle_status <= CYCLE_TAKEN_BRANCH;
-      g_has_instruction <= 0;
+      g_has_instruction_prev <= 0;
+      branch_successful_prev <= 1;
     end else begin
       if (!fetch_stall) begin  // query happened, so i know g_stage is leaving
         g_pc_current   <= f_pc_current;
@@ -242,17 +277,17 @@ module DatapathPipelinedAxil (
       end
 
       if (!fetch_stall && (imem.RVALID && imem.RREADY)) begin
-        g_has_instruction <= 1;
+        g_has_instruction_prev <= 1;
       end else if (fetch_stall && (imem.RVALID && imem.RREADY)) begin
-        g_has_instruction <= 0;
+        g_has_instruction_prev <= 0;
       end else if (fetch_stall && !(imem.RVALID && imem.RREADY)) begin
-        g_has_instruction <= g_has_instruction;  // NOP
+        g_has_instruction_prev <= g_has_instruction_prev;  // NOP
       end
     end
   end
 
-  wire get_stall = g_has_instruction && !(imem.RVALID && imem.RREADY);
-
+  wire get_stall = g_has_instruction_prev && !(imem.RVALID && imem.RREADY);
+  wire g_has_instruction = rst ? 0 : ((branch_successful || branch_successful_prev) ? 0 : ((!fetch_stall && (imem.RVALID && imem.RREADY)) ? 1 : ((fetch_stall && (imem.RVALID && imem.RREADY)) ? 0 : g_has_instruction_prev)));
 
   logic [`REG_SIZE] g_insn;
   assign g_insn = fetch_stall ? 0 : imem.RDATA;
@@ -283,7 +318,7 @@ module DatapathPipelinedAxil (
       decode_state <= '{pc: 0, insn: 0, cycle_status: CYCLE_RESET};
     end else if (branch_successful) begin
       decode_state <= '{pc: 0, insn: `NOP_INSN, cycle_status: CYCLE_TAKEN_BRANCH};
-    end else if (get_stall) begin
+    end else if (get_stall && !load_use_stall && !div_stall) begin
       decode_state <= '{pc: 0, insn: `NOP_INSN, cycle_status: CYCLE_IMEM_WAIT};
     end else if (!load_use_stall && !div_stall && g_has_instruction) begin
       decode_state <= '{pc: g_pc_current, insn: g_insn, cycle_status: g_cycle_status};
@@ -508,6 +543,10 @@ module DatapathPipelinedAxil (
   wire insn_xori = x_insn_opcode == OpRegImm && execute_state.insn[14:12] == 3'b100;
   wire insn_ori = x_insn_opcode == OpRegImm && execute_state.insn[14:12] == 3'b110;
   wire insn_andi = x_insn_opcode == OpRegImm && execute_state.insn[14:12] == 3'b111;
+
+  wire insn_sb = x_insn_opcode == OpStore && execute_state.insn[14:12] == 3'b000;
+  wire insn_sh = x_insn_opcode == OpStore && execute_state.insn[14:12] == 3'b001;
+  wire insn_sw = x_insn_opcode == OpStore && execute_state.insn[14:12] == 3'b010;
 
   wire insn_slli = x_insn_opcode == OpRegImm && execute_state.insn[14:12] == 3'b001 && execute_state.insn[31:25] == 7'd0;
   wire insn_srli = x_insn_opcode == OpRegImm && execute_state.insn[14:12] == 3'b101 && execute_state.insn[31:25] == 7'd0;
@@ -938,9 +977,9 @@ module DatapathPipelinedAxil (
   wire insn_lbu = m_insn_opcode == OpLoad && memory_state.insn[14:12] == 3'b100;
   wire insn_lhu = m_insn_opcode == OpLoad && memory_state.insn[14:12] == 3'b101;
 
-  wire insn_sb = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b000;
-  wire insn_sh = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b001;
-  wire insn_sw = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b010;
+  // wire insn_sb = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b000;
+  // wire insn_sh = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b001;
+  // wire insn_sw = m_insn_opcode == OpStore && memory_state.insn[14:12] == 3'b010;
 
   wire [4:0] m_rs2 = memory_state.insn[24:20];
 
